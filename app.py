@@ -260,8 +260,8 @@ filtered = filtered[:max_results]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-t1, t2, t3, t4 = st.tabs([
-    "Scanner", "Alerts", "Chart", "Model",
+t1, t2, t3, t4, t5 = st.tabs([
+    "Scanner", "Expiry Signals", "Alerts", "Chart", "Model",
 ])
 
 
@@ -445,9 +445,79 @@ with t1:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — ALERTS
+# TAB 2 — EXPIRY SIGNALS (0DTE, 2DTE, Weeklies, Monthlies, Yearly)
 # ═══════════════════════════════════════════════════════════════════════════════
+EXPIRY_ORDER = ["0dte", "2dte", "weeklies", "monthlies", "yearly"]
+EXPIRY_LABELS = {
+    "0dte": ("0 DTE", "Same-day · explosive setup", "rgba(242,54,69,0.2)", "#F23645"),
+    "2dte": ("2 DTE", "1–2 days · imminent move", "rgba(255,159,10,0.2)", "#ff9f0a"),
+    "weeklies": ("Weeklies", "5–7 days · breakout play", "rgba(0,200,5,0.15)", "#00C805"),
+    "monthlies": ("Monthlies", "~30 days · swing setup", "rgba(10,132,255,0.15)", "#0a84ff"),
+    "yearly": ("Yearly", "~365 days · LEAPS trend", "rgba(148,163,184,0.15)", "#94a3b8"),
+}
+
 with t2:
+    st.markdown("### Expiry Signals by Breakout Type")
+    st.caption("Stocks on the verge of a breakout, grouped by recommended options expiry. Based on technicals + real-world events.")
+
+    expiry_groups = {e: [] for e in EXPIRY_ORDER}
+    breakout_min = 60  # Min confidence to show in expiry signals
+    for r in all_results:
+        if r["confidence"] < breakout_min:
+            continue
+        exp = r.get("expiry_signal", "weeklies")
+        if exp in expiry_groups:
+            expiry_groups[exp].append(r)
+
+    for exp_key in EXPIRY_ORDER:
+        rows = expiry_groups[exp_key]
+        if not rows:
+            continue
+        label, desc, bg, color = EXPIRY_LABELS.get(exp_key, (exp_key, "", "rgba(255,255,255,0.05)", "#fff"))
+        st.markdown(f"#### {label}")
+        st.caption(desc)
+        for r in sorted(rows, key=lambda x: x["confidence"], reverse=True)[:15]:
+            cc = "#00C805" if r["change_pct"] >= 0 else "#F23645"
+            cat_preview = (r["catalysts"][0][:50] + "…") if r["catalysts"] else "—"
+            st.markdown(f"""
+            <div style="background:{bg};border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px 18px;margin-bottom:8px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                <div>
+                  <span style="font-weight:700;color:#fff;font-family:monospace;">{r['symbol']}</span>
+                  <span style="font-size:0.75rem;color:rgba(255,255,255,0.5);margin-left:8px;">{r.get('name','')[:25]}</span>
+                  <span style="font-size:0.7rem;font-weight:600;color:{color};margin-left:6px;">{r['direction'].upper()}</span>
+                </div>
+                <div style="display:flex;gap:16px;align-items:center;">
+                  <span style="color:#fff;font-weight:600;">${r['price']:.2f}</span>
+                  <span style="color:{cc};font-weight:600;">{_fp(r['change_pct'])}</span>
+                  <span style="color:{color};font-weight:700;">{r['confidence']:.1f}%</span>
+                </div>
+              </div>
+              <div style="font-size:0.78rem;color:rgba(255,255,255,0.55);margin-top:6px;">{cat_preview}</div>
+              <div style="margin-top:6px;">{_badges(r['signals'][:3])}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown("")
+
+    if not any(expiry_groups.values()):
+        st.info("Run a scan to see expiry signals. Stocks are assigned to 0DTE, 2DTE, Weeklies, Monthlies, or Yearly based on technical setup + catalysts.")
+
+    with st.expander("How expiry signals are assigned"):
+        st.markdown("""
+        - **0 DTE**: BB squeeze + volume surge (≥2.5x) + catalyst or 90%+ confidence — explosive same-day move
+        - **2 DTE**: Squeeze or vol spike (≥2x) + catalyst/momentum + 80%+ confidence — 1–2 day breakout
+        - **Weeklies**: Volume confirmation (≥1.5x) + 70%+ confidence — standard 5–7 day play
+        - **Monthlies**: 65%+ confidence + trend (price > SMA50) — ~30 day swing
+        - **Yearly**: 60%+ confidence + above SMA200 — LEAPS-style trend play
+
+        *Catalysts = news sentiment, multiple technical signals, or event-driven factors.*
+        """)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — ALERTS
+# ═══════════════════════════════════════════════════════════════════════════════
+with t3:
     st.markdown("### Alert History")
     st.caption(f"Bullish & bearish alerts when confidence ≥ {config.ALERT_THRESHOLD:.0f}% · 4h throttle per symbol+direction")
 
@@ -490,9 +560,9 @@ with t2:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — CHART
+# TAB 4 — CHART
 # ═══════════════════════════════════════════════════════════════════════════════
-with t3:
+with t4:
     st.markdown("### 📈 Price Chart + Indicators")
 
     live = scanner.get_latest_results()
@@ -610,9 +680,9 @@ with t3:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — MODEL
+# TAB 5 — MODEL
 # ═══════════════════════════════════════════════════════════════════════════════
-with t4:
+with t5:
     st.markdown("### 🤖 ML Model")
     col_a, col_b = st.columns(2)
     with col_a:

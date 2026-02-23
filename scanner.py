@@ -111,6 +111,46 @@ def stop_scheduler() -> None:
             _scheduler = None
 
 
+# ── Expiry signal assignment ───────────────────────────────────────────────────
+
+def _assign_expiry_signal(
+    price: float, sma20: float, sma50: float, sma200: float,
+    bb_squeeze: bool, vol_ratio: float, confidence: float,
+    catalysts: list[str], news: list, sentiment_score: float, macd_hist: float,
+) -> str:
+    """
+    Assign expiry bucket based on technicals + events.
+    Stocks on verge of breakout: 0DTE (imminent) → Yearly (long-term trend).
+    """
+    has_catalyst = len(catalysts) >= 2 or (news and abs(sentiment_score - 50) > 15)
+    strong_momentum = abs(macd_hist) > 0.01 if macd_hist else False
+    above_sma200 = price > sma200 if sma200 else False
+    above_sma50 = price > sma50 if sma50 else False
+
+    # 0DTE: Explosive setup — BB squeeze + surge vol + catalyst or very high confidence
+    if bb_squeeze and vol_ratio >= 2.5 and (has_catalyst or confidence >= 90):
+        return "0dte"
+
+    # 2DTE: Imminent — squeeze or vol spike + catalyst/momentum
+    if (bb_squeeze or vol_ratio >= 2.0) and confidence >= 80 and (has_catalyst or strong_momentum):
+        return "2dte"
+
+    # Weeklies: Standard breakout — volume confirmation, good confidence
+    if vol_ratio >= 1.5 and confidence >= 70:
+        return "weeklies"
+
+    # Monthlies: Established setup — trend + moderate confidence
+    if confidence >= 65 and (above_sma50 or vol_ratio >= 1.2):
+        return "monthlies"
+
+    # Yearly: Major trend — LEAPS candidate
+    if confidence >= 60 and above_sma200:
+        return "yearly"
+
+    # Default to weeklies for decent setups
+    return "weeklies" if confidence >= 65 else "monthlies"
+
+
 # ── Per-symbol analysis ───────────────────────────────────────────────────────
 
 def _analyze(symbol: str, name: str) -> Optional[dict]:
@@ -234,6 +274,12 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             "resistance":      resistance,
             "risk_reward":     risk_reward,
             "position_pct":    position_pct,
+            "expiry_signal":   _assign_expiry_signal(
+                price=price, sma20=ind["sma20"], sma50=ind["sma50"], sma200=ind["sma200"],
+                bb_squeeze=ind["bb_squeeze"], vol_ratio=ind["vol_ratio"],
+                confidence=confidence, catalysts=catalysts, news=news,
+                sentiment_score=sentiment_score, macd_hist=ind["macd_hist"],
+            ),
         }
     except Exception as e:
         logger.debug(f"Analysis failed for {symbol}: {e}")
