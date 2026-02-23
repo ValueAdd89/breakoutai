@@ -376,12 +376,22 @@ with t1:
 
     # Full results table
     if not all_results:
+        prog = scanner.get_scan_progress()
+        is_running = prog.get("running", False)
         st.info(
             "🔄 Full-market scan in progress…\n\n"
             "**Stage 1** — Pre-screening ~3,000 tickers for liquidity (~2 min)\n\n"
             "**Stage 2** — Running ML + indicators on ~400-800 candidates in parallel (~5 min)\n\n"
-            "Results will appear here automatically. You can also check the sidebar progress bar."
+            ("**This page auto-refreshes every 15 seconds** while scanning. " if is_running else "")
+            + "Click **Refresh** below to check for results."
         )
+        if is_running:
+            done, total = prog.get("done", 0), prog.get("total", 0) or 1
+            st.progress(done / total, text=f"{prog.get('phase', 'analyzing').title()}… {done:,} / {total:,} symbols")
+            time.sleep(15)
+            st.rerun()
+        else:
+            st.warning("Scan idle. Click **Scan Now** in the sidebar to start, or **Refresh** to reload.")
     else:
         st.markdown(f"### 📊 Top Results  ·  *{len(filtered):,} shown, {len(all_results):,} scanned*")
 
@@ -437,7 +447,7 @@ with t1:
     with c_ar:
         auto = st.checkbox("Auto-refresh every 60 s", value=False, key="auto_refresh")
     with c_ref:
-        if st.button("🔄 Refresh"):
+        if st.button("🔄 Refresh", help="Click to refresh and see latest results"):
             st.rerun()
     if auto:
         time.sleep(60)
