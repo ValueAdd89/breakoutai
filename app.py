@@ -378,13 +378,15 @@ with t1:
     if not all_results:
         prog = scanner.get_scan_progress()
         is_running = prog.get("running", False)
-        st.info(
+        msg = (
             "🔄 Full-market scan in progress…\n\n"
             "**Stage 1** — Pre-screening ~3,000 tickers for liquidity (~2 min)\n\n"
             "**Stage 2** — Running ML + indicators on ~400-800 candidates in parallel (~5 min)\n\n"
-            ("**This page auto-refreshes every 15 seconds** while scanning. " if is_running else "")
-            + "Click **Refresh** below to check for results."
         )
+        if is_running:
+            msg += "**This page auto-refreshes every 15 seconds** while scanning. "
+        msg += "Click **Refresh** below to check for results."
+        st.info(msg)
         if is_running:
             done, total = prog.get("done", 0), prog.get("total", 0) or 1
             st.progress(done / total, text=f"{prog.get('phase', 'analyzing').title()}… {done:,} / {total:,} symbols")
