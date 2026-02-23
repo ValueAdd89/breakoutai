@@ -27,55 +27,94 @@ from universe import get_full_universe
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="BreakoutAI — Full Market Scanner",
-    page_icon="⚡",
+    page_title="BreakoutAI",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── CSS ───────────────────────────────────────────────────────────────────────
+# ── Robinhood-inspired CSS ─────────────────────────────────────────────────────
 st.markdown("""
 <style>
-.stApp { background-color: #0a0e1a; }
-[data-testid="stSidebar"] { background-color: #0f1629; border-right: 1px solid #1c2840; }
-.block-container { padding-top: 1rem; padding-bottom: 1rem; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
+/* Robinhood dark theme */
+.stApp { background: #000000; font-family: 'Inter', -apple-system, sans-serif; }
+[data-testid="stSidebar"] {
+    background: #0C0C0E;
+    border-right: 1px solid rgba(255,255,255,0.06);
+}
+.block-container { padding: 1.5rem 2rem 2rem; max-width: 1200px; }
+
+/* Robinhood green #00C805, red #F23645 */
 .metric-card {
-    background:#0f1629; border:1px solid #1c2840;
-    border-radius:12px; padding:14px 18px; text-align:center;
+    background: #0C0C0E;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 16px;
+    padding: 20px;
+    text-align: center;
+    transition: background 0.2s;
 }
-.metric-value { font-size:1.8rem; font-weight:800; font-family:'Courier New',monospace; }
-.metric-label { font-size:0.68rem; color:#64748b; font-weight:600;
-                letter-spacing:0.12em; text-transform:uppercase; margin-bottom:3px; }
+.metric-card:hover { background: #141418; }
+.metric-value { font-size: 2rem; font-weight: 700; font-family: -apple-system, BlinkMacSystemFont, sans-serif; letter-spacing: -0.02em; }
+.metric-label { font-size: 0.7rem; color: rgba(255,255,255,0.45); font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; }
 
+/* High-confidence cards — clean Robinhood style */
 .alert-card {
-    background:linear-gradient(135deg,#0f2a1e,#0a1f16);
-    border:1px solid #00ff8840; border-left:4px solid #00ff88;
-    border-radius:10px; padding:14px 18px; margin-bottom:10px;
+    background: #0C0C0E;
+    border: 1px solid rgba(0,200,5,0.25);
+    border-radius: 16px;
+    padding: 20px 24px;
+    margin-bottom: 12px;
+    transition: background 0.2s, border-color 0.2s;
 }
+.alert-card:hover { background: #141418; border-color: rgba(0,200,5,0.35); }
 .alert-card-bear {
-    background:linear-gradient(135deg,#2a0f0f,#1f0a0a);
-    border:1px solid #ff456040; border-left:4px solid #ff4560;
-    border-radius:10px; padding:14px 18px; margin-bottom:10px;
+    background: #0C0C0E;
+    border: 1px solid rgba(242,54,69,0.25);
+    border-radius: 16px;
+    padding: 20px 24px;
+    margin-bottom: 12px;
 }
+.alert-card-bear:hover { background: #141418; border-color: rgba(242,54,69,0.35); }
 
-.sig-bull { background:#00ff8820; color:#00ff88; border:1px solid #00ff8840;
-             border-radius:20px; padding:2px 10px; font-size:0.7rem;
-             font-weight:700; display:inline-block; margin:2px; }
-.sig-bear { background:#ff456020; color:#ff4560; border:1px solid #ff456040;
-             border-radius:20px; padding:2px 10px; font-size:0.7rem;
-             font-weight:700; display:inline-block; margin:2px; }
-.sig-neut { background:#33333550; color:#94a3b8; border:1px solid #ffffff15;
-             border-radius:20px; padding:2px 10px; font-size:0.7rem;
-             display:inline-block; margin:2px; }
+/* Signal badges — minimal pills */
+.sig-bull { background: rgba(0,200,5,0.12); color: #00C805; border-radius: 8px; padding: 4px 10px; font-size: 0.7rem; font-weight: 600; display: inline-block; margin: 2px; }
+.sig-bear { background: rgba(242,54,69,0.12); color: #F23645; border-radius: 8px; padding: 4px 10px; font-size: 0.7rem; font-weight: 600; display: inline-block; margin: 2px; }
+.sig-neut { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5); border-radius: 8px; padding: 4px 10px; font-size: 0.7rem; display: inline-block; margin: 2px; }
 
-.live-dot { width:8px; height:8px; background:#00ff88; border-radius:50%;
-            display:inline-block; margin-right:6px; animation:pulse 2s infinite; }
-@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+.live-dot { width: 6px; height: 6px; background: #00C805; border-radius: 50%; display: inline-block; margin-right: 8px; animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
 
-.progress-bar-outer { background:#1c2840; border-radius:6px; height:8px; overflow:hidden; margin:6px 0; }
-.progress-bar-inner { height:100%; border-radius:6px; background:linear-gradient(90deg,#00b4d8,#00ff88);
-                      transition:width 0.5s ease; }
+.progress-bar-outer { background: rgba(255,255,255,0.08); border-radius: 8px; height: 6px; overflow: hidden; margin: 8px 0; }
+.progress-bar-inner { height: 100%; border-radius: 8px; background: #00C805; transition: width 0.5s ease; }
+
+/* Robinhood-style stock row */
+.stock-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.06);
+    transition: background 0.15s; cursor: pointer;
+}
+.stock-row:hover { background: rgba(255,255,255,0.03); }
+.stock-row:last-child { border-bottom: none; }
+.stock-symbol { font-size: 1.1rem; font-weight: 700; color: #fff; }
+.stock-name { font-size: 0.8rem; color: rgba(255,255,255,0.45); margin-top: 2px; }
+.stock-price { font-size: 1rem; font-weight: 600; color: #fff; text-align: right; }
+.stock-change { font-size: 0.95rem; font-weight: 600; text-align: right; }
+.stock-conf { font-size: 0.85rem; font-weight: 600; }
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] { gap: 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.stTabs [data-baseweb="tab"] { padding: 12px 20px; font-weight: 500; font-size: 0.9rem; }
+.stTabs [aria-selected="true"] { border-bottom: 2px solid #00C805; color: #00C805; }
+
+/* Buttons */
+.stButton > button { border-radius: 12px; font-weight: 600; }
+.stButton > button[kind="primary"] { background: #00C805; color: #000; border: none; }
+.stButton > button[kind="primary"]:hover { background: #00a804; color: #000; }
+
+/* Selectbox / inputs */
+.stSelectbox > div, .stTextInput > div > div { border-radius: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -103,11 +142,11 @@ _init()
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _cc(c: float) -> str:
-    if c >= 90: return "#00ff88"
-    if c >= 75: return "#4ade80"
-    if c >= 60: return "#ffd60a"
-    if c >= 45: return "#fb923c"
-    return "#ff4560"
+    if c >= 90: return "#00C805"   # Robinhood green
+    if c >= 75: return "#22c55e"
+    if c >= 60: return "#eab308"
+    if c >= 45: return "#f97316"
+    return "#F23645"  # Robinhood red
 
 def _de(d: str) -> str:
     return "🟢" if d == "bullish" else "🔴" if d == "bearish" else "⚪"
@@ -116,9 +155,9 @@ def _fp(p: float) -> str:
     return f"+{p:.2f}%" if p >= 0 else f"{p:.2f}%"
 
 def _bar(score: float, color: str) -> str:
-    return (f'<div style="background:#1c2840;border-radius:4px;height:5px;'
+    return (f'<div style="background:rgba(255,255,255,0.08);border-radius:4px;height:5px;'
             f'overflow:hidden;margin-top:3px;display:inline-block;width:60px;">'
-            f'<div style="width:{score}%;height:100%;background:{color};border-radius:4px;"></div></div>')
+            f'<div style="width:{min(100,score)}%;height:100%;background:{color};border-radius:4px;"></div></div>')
 
 def _badges(signals: list[dict]) -> str:
     out = ""
@@ -131,15 +170,15 @@ def _badges(signals: list[dict]) -> str:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("## ⚡ BreakoutAI")
-    st.markdown("*Full Market Scanner*")
+    st.markdown("## BreakoutAI")
+    st.markdown("*Full market scanner*")
     st.markdown("---")
 
     prog   = scanner.get_scan_progress()
     running = scanner.is_running()
     last_scan = scanner.get_last_scan_time()
 
-    sc_color = "#00ff88" if running else "#64748b"
+    sc_color = "#00C805" if running else "rgba(255,255,255,0.5)"
     st.markdown(
         f'<span class="live-dot"></span> Scanner: <strong style="color:{sc_color};">{"Running" if running else "Idle"}</strong>',
         unsafe_allow_html=True,
@@ -157,7 +196,7 @@ with st.sidebar:
         st.markdown(
             f'<div class="progress-bar-outer">'
             f'<div class="progress-bar-inner" style="width:{pct}%;"></div></div>'
-            f'<div style="font-size:0.72rem;color:#64748b;">{done}/{total} symbols ({pct}%)</div>',
+            f'<div style="font-size:0.75rem;color:rgba(255,255,255,0.5);">{done}/{total} symbols</div>',
             unsafe_allow_html=True,
         )
 
@@ -222,7 +261,7 @@ filtered = filtered[:max_results]
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
 t1, t2, t3, t4 = st.tabs([
-    "🔍 Scanner", "🚨 Alerts", "📈 Chart", "🤖 Model",
+    "Scanner", "Alerts", "Chart", "Model",
 ])
 
 
@@ -241,54 +280,54 @@ with t1:
         universe_count = len(get_full_universe()) if all_results else 0
         universe_display = f"{universe_count:,}" if universe_count else "—"
         st.markdown(f'<div class="metric-card"><div class="metric-label">Universe</div>'
-                    f'<div class="metric-value" style="color:#64748b;">{universe_display}</div></div>',
+                    f'<div class="metric-value" style="color:rgba(255,255,255,0.6);">{universe_display}</div></div>',
                     unsafe_allow_html=True)
     with k2:
         st.markdown(f'<div class="metric-card"><div class="metric-label">Scanned</div>'
-                    f'<div class="metric-value" style="color:#00b4d8;">{len(all_results):,}</div></div>',
+                    f'<div class="metric-value" style="color:#fff;">{len(all_results):,}</div></div>',
                     unsafe_allow_html=True)
     with k3:
         st.markdown(f'<div class="metric-card"><div class="metric-label">Bullish</div>'
-                    f'<div class="metric-value" style="color:#4ade80;">{len(bullish):,}</div></div>',
+                    f'<div class="metric-value" style="color:#00C805;">{len(bullish):,}</div></div>',
                     unsafe_allow_html=True)
     with k4:
-        st.markdown(f'<div class="metric-card"><div class="metric-label">≥{config.ALERT_THRESHOLD:.0f}% Conf</div>'
-                    f'<div class="metric-value" style="color:#00ff88;">{len(high_conf):,}</div></div>',
+        st.markdown(f'<div class="metric-card"><div class="metric-label">≥{config.ALERT_THRESHOLD:.0f}%</div>'
+                    f'<div class="metric-value" style="color:#00C805;">{len(high_conf):,}</div></div>',
                     unsafe_allow_html=True)
     with k5:
         tc  = f"{top['confidence']:.1f}%" if top else "—"
         tsym = top["symbol"] if top else "—"
         st.markdown(f'<div class="metric-card"><div class="metric-label">Top Pick</div>'
-                    f'<div class="metric-value" style="color:#00ff88;">{tc}</div>'
-                    f'<div style="font-size:0.72rem;color:#64748b;">{tsym}</div></div>',
+                    f'<div class="metric-value" style="color:#00C805;">{tc}</div>'
+                    f'<div style="font-size:0.75rem;color:rgba(255,255,255,0.5);">{tsym}</div></div>',
                     unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Live scan progress banner
+    # Live scan progress — Robinhood-style minimal banner
     if prog["running"]:
         total = prog["total"] or 1
         done  = prog["done"]
         pct   = int(done / total * 100) if total else 0
         st.markdown(
-            f'<div style="background:#0f1629;border:1px solid #1c2840;border-radius:10px;padding:12px 16px;">'
-            f'<div style="color:#00b4d8;font-size:0.8rem;font-weight:600;margin-bottom:6px;">'
-            f'🔄 {prog["phase"].title()} market… {done:,}/{total:,} symbols ({pct}%)</div>'
+            f'<div style="background:#0C0C0E;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:16px 20px;">'
+            f'<div style="color:rgba(255,255,255,0.8);font-size:0.9rem;font-weight:500;margin-bottom:8px;">'
+            f'Scanning… {done:,} / {total:,} symbols</div>'
             f'<div class="progress-bar-outer"><div class="progress-bar-inner" style="width:{pct}%;"></div></div>'
             f'</div>',
             unsafe_allow_html=True,
         )
         st.markdown("<br>", unsafe_allow_html=True)
 
-    # High-confidence alert cards
+    # High-confidence alert cards — Robinhood-style
     if high_conf:
-        st.markdown(f"### 🚨 High-Confidence Breakouts ≥ {config.ALERT_THRESHOLD:.0f}%")
+        st.markdown(f"### High-Confidence Breakouts ≥ {config.ALERT_THRESHOLD:.0f}%")
         for r in sorted(high_conf, key=lambda x: x["confidence"], reverse=True)[:10]:
             cls  = "alert-card" if r["direction"] == "bullish" else "alert-card-bear"
             col  = _cc(r["confidence"])
-            cc   = "#00ff88" if r["change_pct"] >= 0 else "#ff4560"
+            cc   = "#00C805" if r["change_pct"] >= 0 else "#F23645"
             cats = "".join(
-                f'<div style="font-size:0.76rem;color:#94a3b8;margin-top:3px;">▸ {c}</div>'
+                f'<div style="font-size:0.76rem;color:rgba(255,255,255,0.6);margin-top:3px;">▸ {c}</div>'
                 for c in r["catalysts"][:3]
             )
             st.markdown(f"""
@@ -296,19 +335,19 @@ with t1:
               <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
                 <div>
                   <span style="font-size:1.25rem;font-weight:800;color:white;font-family:monospace;">{r['symbol']}</span>
-                  <span style="font-size:0.78rem;color:#64748b;margin-left:8px;">{r.get('name','')[:30]}</span>
+                  <span style="font-size:0.78rem;color:rgba(255,255,255,0.5);margin-left:8px;">{r.get('name','')[:30]}</span>
                 </div>
                 <div style="text-align:right;">
                   <div style="font-size:1.5rem;font-weight:800;color:{col};font-family:monospace;">{r['confidence']:.1f}%</div>
-                  <div style="font-size:0.65rem;color:#64748b;letter-spacing:0.1em;">ML CONFIDENCE</div>
+                  <div style="font-size:0.65rem;color:rgba(255,255,255,0.45);letter-spacing:0.08em;">CONFIDENCE</div>
                 </div>
               </div>
               <div style="margin-top:8px;display:flex;gap:16px;flex-wrap:wrap;">
-                <span style="color:#64748b;font-size:0.72rem;">PRICE</span> <span style="color:white;font-family:monospace;">${r['price']:.2f}</span>
-                <span style="color:#64748b;font-size:0.72rem;">TODAY</span> <span style="color:{cc};font-weight:600;">{_fp(r['change_pct'])}</span>
-                <span style="color:#64748b;font-size:0.72rem;">SCORE</span> <span style="color:#00b4d8;font-weight:600;">{r['final_score']:.0f}/100</span>
-                <span style="color:#64748b;font-size:0.72rem;">RSI</span>   <span style="color:white;font-family:monospace;">{r['rsi']:.1f}</span>
-                <span style="color:#64748b;font-size:0.72rem;">VOL</span>   <span style="color:white;font-family:monospace;">{r['vol_ratio']:.1f}x</span>
+                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">PRICE</span> <span style="color:#fff;font-weight:600;">${r['price']:.2f}</span>
+                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">TODAY</span> <span style="color:{cc};font-weight:600;">{_fp(r['change_pct'])}</span>
+                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">SCORE</span> <span style="color:#fff;font-weight:600;">{r['final_score']:.0f}/100</span>
+                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">RSI</span>   <span style="color:#fff;font-weight:500;">{r['rsi']:.1f}</span>
+                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">VOL</span>   <span style="color:#fff;font-weight:500;">{r['vol_ratio']:.1f}x</span>
               </div>
               <div style="margin-top:6px;">{_badges(r['signals'])}</div>
               {('<div style="margin-top:6px;">' + cats + '</div>') if r['catalysts'] else ''}
@@ -327,47 +366,49 @@ with t1:
     else:
         st.markdown(f"### 📊 Top Results  ·  *{len(filtered):,} shown, {len(all_results):,} scanned*")
 
-        # Render as a clean scrollable HTML table for speed (no st.dataframe overhead)
+        # Robinhood-style stock list
         rows_html = ""
         for r in filtered:
             col   = _cc(r["confidence"])
-            cc    = "#00ff88" if r["change_pct"] >= 0 else "#ff4560"
-            sqz   = ' <span class="sig-bull">🔥SQZ</span>' if r.get("bb_squeeze") else ""
+            cc    = "#00C805" if r["change_pct"] >= 0 else "#F23645"
+            sqz   = ' <span class="sig-bull">SQZ</span>' if r.get("bb_squeeze") else ""
             badge = _badges(r["signals"][:3])
             rows_html += f"""
-            <tr style="border-bottom:1px solid #1c2840;">
-              <td style="padding:8px 10px;white-space:nowrap;">
-                <span style="font-weight:800;color:white;font-family:monospace;">{_de(r['direction'])} {r['symbol']}</span><br>
-                <span style="font-size:0.7rem;color:#64748b;">{r.get('name','')[:22]}</span>
+            <tr class="stock-row">
+              <td style="padding:16px 20px;white-space:nowrap;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <div class="stock-symbol">{_de(r['direction'])} {r['symbol']}</div>
+                <div class="stock-name">{r.get('name','')[:28]}</div>
               </td>
-              <td style="padding:8px 10px;text-align:right;font-family:monospace;color:white;">${r['price']:.2f}</td>
-              <td style="padding:8px 10px;text-align:right;font-family:monospace;color:{cc};font-weight:600;">{_fp(r['change_pct'])}</td>
-              <td style="padding:8px 10px;">
-                <span style="font-weight:800;color:{col};font-family:monospace;">{r['confidence']:.1f}%</span>
-                <div style="background:#1c2840;border-radius:3px;height:4px;margin-top:3px;">
-                  <div style="width:{r['confidence']}%;height:100%;background:{col};border-radius:3px;"></div>
+              <td style="padding:16px 12px;text-align:right;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <div class="stock-price">${r['price']:.2f}</div>
+              </td>
+              <td style="padding:16px 12px;text-align:right;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <div class="stock-change" style="color:{cc};">{_fp(r['change_pct'])}</div>
+              </td>
+              <td style="padding:16px 12px;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <div class="stock-conf" style="color:{col};">{r['confidence']:.1f}%</div>
+                <div style="background:rgba(255,255,255,0.08);border-radius:4px;height:4px;margin-top:4px;width:60px;">
+                  <div style="width:{min(100,r['confidence'])}%;height:100%;background:{col};border-radius:4px;"></div>
                 </div>
               </td>
-              <td style="padding:8px 10px;text-align:right;font-family:monospace;color:#94a3b8;">{r['rsi']:.0f}</td>
-              <td style="padding:8px 10px;text-align:right;font-family:monospace;color:#94a3b8;">{r['vol_ratio']:.1f}x</td>
-              <td style="padding:8px 10px;font-size:0.72rem;">{badge}{sqz}</td>
+              <td style="padding:16px 12px;text-align:right;color:rgba(255,255,255,0.5);font-size:0.85rem;border-bottom:1px solid rgba(255,255,255,0.06);">{r['rsi']:.0f}</td>
+              <td style="padding:16px 20px;font-size:0.8rem;border-bottom:1px solid rgba(255,255,255,0.06);">{badge}{sqz}</td>
             </tr>"""
 
         st.markdown(f"""
-        <div style="overflow-x:auto;max-height:600px;overflow-y:auto;">
-        <table style="width:100%;border-collapse:collapse;font-size:0.82rem;">
+        <div style="overflow-x:auto;max-height:620px;overflow-y:auto;background:#0C0C0E;border:1px solid rgba(255,255,255,0.06);border-radius:16px;">
+        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
           <thead>
-            <tr style="position:sticky;top:0;background:#0f1629;z-index:1;border-bottom:2px solid #1c2840;">
-              <th style="padding:8px 10px;text-align:left;color:#64748b;font-weight:600;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;">Symbol</th>
-              <th style="padding:8px 10px;text-align:right;color:#64748b;font-weight:600;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;">Price</th>
-              <th style="padding:8px 10px;text-align:right;color:#64748b;font-weight:600;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;">Chg%</th>
-              <th style="padding:8px 10px;color:#64748b;font-weight:600;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;">Confidence</th>
-              <th style="padding:8px 10px;text-align:right;color:#64748b;font-weight:600;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;">RSI</th>
-              <th style="padding:8px 10px;text-align:right;color:#64748b;font-weight:600;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;">Vol</th>
-              <th style="padding:8px 10px;color:#64748b;font-weight:600;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.08em;">Signals</th>
+            <tr style="position:sticky;top:0;background:#0C0C0E;z-index:1;border-bottom:1px solid rgba(255,255,255,0.08);">
+              <th style="padding:12px 20px;text-align:left;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Symbol</th>
+              <th style="padding:12px;text-align:right;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Price</th>
+              <th style="padding:12px;text-align:right;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Chg%</th>
+              <th style="padding:12px;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Confidence</th>
+              <th style="padding:12px;text-align:right;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">RSI</th>
+              <th style="padding:12px 20px;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Signals</th>
             </tr>
           </thead>
-          <tbody style="background:#0a0e1a;">{rows_html}</tbody>
+          <tbody style="background:#000;">{rows_html}</tbody>
         </table>
         </div>
         """, unsafe_allow_html=True)
@@ -469,22 +510,22 @@ with t3:
                 fig.add_trace(go.Candlestick(
                     x=df[dc], open=df["open"], high=df["high"],
                     low=df["low"], close=close, name=sym,
-                    increasing_line_color="#00ff88", decreasing_line_color="#ff4560",
-                    increasing_fillcolor="#00ff8830", decreasing_fillcolor="#ff456030",
+                    increasing_line_color="#00C805", decreasing_line_color="#F23645",
+                    increasing_fillcolor="#00C805", decreasing_fillcolor="#F23645",
                 ))
-                # MAs
+                # MAs — Robinhood-style subtle lines
                 fig.add_trace(go.Scatter(x=df[dc], y=df["sma20"],  name="SMA 20",
-                                          line=dict(color="#00b4d8", width=1.5)))
+                                          line=dict(color="#00C805", width=1.5)))
                 fig.add_trace(go.Scatter(x=df[dc], y=df["sma50"],  name="SMA 50",
-                                          line=dict(color="#ffd60a", width=1.5, dash="dot")))
+                                          line=dict(color="#eab308", width=1.5, dash="dot")))
                 fig.add_trace(go.Scatter(x=df[dc], y=df["sma200"], name="SMA 200",
-                                          line=dict(color="#7c3aed", width=1, dash="dash"), opacity=0.6))
+                                          line=dict(color="rgba(255,255,255,0.4)", width=1, dash="dash")))
                 # Bollinger Bands
                 fig.add_trace(go.Scatter(x=df[dc], y=df["bb_up"], name="BB Upper",
-                                          line=dict(color="#94a3b8", width=1, dash="dot"), opacity=0.5))
+                                          line=dict(color="rgba(255,255,255,0.3)", width=1, dash="dot")))
                 fig.add_trace(go.Scatter(x=df[dc], y=df["bb_lo"], name="BB Lower",
-                                          line=dict(color="#94a3b8", width=1, dash="dot"), opacity=0.5,
-                                          fill="tonexty", fillcolor="rgba(148,163,184,0.04)"))
+                                          line=dict(color="rgba(255,255,255,0.3)", width=1, dash="dot"),
+                                          fill="tonexty", fillcolor="rgba(255,255,255,0.03)"))
 
                 # Annotate if high-confidence
                 res = next((r for r in live if r["symbol"] == sym), None)
@@ -493,32 +534,32 @@ with t3:
                         x=df[dc].iloc[-1], y=float(close.iloc[-1]),
                         text=f"⚡ {res['confidence']:.0f}%",
                         showarrow=True, arrowhead=2,
-                        arrowcolor="#00ff88",
-                        font=dict(color="#00ff88", size=13, family="monospace"),
-                        bgcolor="#00ff8815", bordercolor="#00ff8840",
+                        arrowcolor="#00C805",
+                        font=dict(color="#00C805", size=13),
+                        bgcolor="rgba(0,200,5,0.1)", bordercolor="rgba(0,200,5,0.4)",
                     )
 
                 fig.update_layout(
-                    paper_bgcolor="#0a0e1a", plot_bgcolor="#0f1629",
-                    font=dict(color="#94a3b8"), height=440,
-                    xaxis=dict(gridcolor="#1c2840", rangeslider_visible=False),
-                    yaxis=dict(gridcolor="#1c2840", tickprefix="$"),
-                    legend=dict(bgcolor="#0f1629", bordercolor="#1c2840", orientation="h", y=-0.15),
+                    paper_bgcolor="#000000", plot_bgcolor="#0C0C0E",
+                    font=dict(color="rgba(255,255,255,0.7)"), height=440,
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", rangeslider_visible=False),
+                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", tickprefix="$"),
+                    legend=dict(bgcolor="#0C0C0E", bordercolor="rgba(255,255,255,0.08)", orientation="h", y=-0.15),
                     margin=dict(l=10, r=10, t=30, b=10),
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
                 # Volume
-                vc = ["#00ff88" if c >= o else "#ff4560" for c, o in zip(df["close"], df["open"])]
+                vc = ["#00C805" if c >= o else "#F23645" for c, o in zip(df["close"], df["open"])]
                 fv = go.Figure()
                 fv.add_trace(go.Bar(x=df[dc], y=df["volume"], marker_color=vc, opacity=0.7, name="Volume"))
                 fv.add_trace(go.Scatter(x=df[dc], y=df["vol_avg"], name="20d avg",
-                                         line=dict(color="#ffd60a", width=1.5)))
+                                         line=dict(color="#eab308", width=1.5)))
                 fv.update_layout(
-                    paper_bgcolor="#0a0e1a", plot_bgcolor="#0f1629",
-                    font=dict(color="#94a3b8"), height=140,
-                    xaxis=dict(gridcolor="#1c2840"),
-                    yaxis=dict(gridcolor="#1c2840"),
+                    paper_bgcolor="#000000", plot_bgcolor="#0C0C0E",
+                    font=dict(color="rgba(255,255,255,0.7)"), height=140,
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
+                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
                     margin=dict(l=10, r=10, t=5, b=10), showlegend=False,
                 )
                 st.plotly_chart(fv, use_container_width=True)
