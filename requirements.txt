@@ -11,3 +11,5 @@ textblob>=0.18.0
 apscheduler>=3.10.4
 cachetools>=5.3.2
 plotly>=5.20.0
+lxml>=5.0.0
+html5lib>=1.1

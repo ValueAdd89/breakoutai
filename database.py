@@ -1,6 +1,6 @@
 """
-SQLite persistence — alert history, scan log, watchlist.
-Uses the path from paths.py so it works locally and on Streamlit Cloud.
+SQLite persistence — alert history and scan log.
+The watchlist concept is replaced by the full-market universe scanner.
 """
 import sqlite3
 import json
@@ -44,13 +44,9 @@ def init_db() -> None:
             price      REAL,
             scanned_at TEXT NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS watchlist (
-            symbol   TEXT PRIMARY KEY,
-            added_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_alerts_symbol   ON alerts(symbol);
-        CREATE INDEX IF NOT EXISTS idx_alerts_time     ON alerts(triggered_at);
-        CREATE INDEX IF NOT EXISTS idx_scan_symbol     ON scan_log(symbol);
+        CREATE INDEX IF NOT EXISTS idx_alerts_symbol ON alerts(symbol);
+        CREATE INDEX IF NOT EXISTS idx_alerts_time   ON alerts(triggered_at);
+        CREATE INDEX IF NOT EXISTS idx_scan_symbol   ON scan_log(symbol);
         """)
 
 
@@ -71,7 +67,7 @@ def save_alert(
         return cur.lastrowid  # type: ignore
 
 
-def get_alerts(limit: int = 100) -> list[dict]:
+def get_alerts(limit: int = 200) -> list[dict]:
     with _lock, _conn() as c:
         rows = c.execute(
             "SELECT * FROM alerts ORDER BY triggered_at DESC LIMIT ?", (limit,)
@@ -110,34 +106,3 @@ def get_scan_history(symbol: str, limit: int = 50) -> list[dict]:
             (symbol, limit),
         ).fetchall()
     return [dict(r) for r in rows]
-
-
-def get_watchlist() -> list[str]:
-    with _lock, _conn() as c:
-        rows = c.execute("SELECT symbol FROM watchlist ORDER BY added_at").fetchall()
-    return [r["symbol"] for r in rows]
-
-
-def add_to_watchlist(symbol: str) -> None:
-    with _lock, _conn() as c:
-        c.execute(
-            "INSERT OR IGNORE INTO watchlist (symbol, added_at) VALUES (?,?)",
-            (symbol, datetime.now(timezone.utc).isoformat()),
-        )
-
-
-def remove_from_watchlist(symbol: str) -> None:
-    with _lock, _conn() as c:
-        c.execute("DELETE FROM watchlist WHERE symbol=?", (symbol,))
-
-
-def bulk_init_watchlist(symbols: list[str]) -> None:
-    """Seed watchlist on first run if empty."""
-    with _lock, _conn() as c:
-        existing = c.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0]
-        if existing == 0:
-            now = datetime.now(timezone.utc).isoformat()
-            c.executemany(
-                "INSERT OR IGNORE INTO watchlist (symbol, added_at) VALUES (?,?)",
-                [(s, now) for s in symbols],
-            )
