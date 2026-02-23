@@ -273,6 +273,7 @@ with t1:
     # KPI row
     high_conf = [r for r in all_results if r["confidence"] >= config.ALERT_THRESHOLD]
     bullish   = [r for r in all_results if r["direction"] == "bullish"]
+    bearish   = [r for r in all_results if r["direction"] == "bearish"]
     top       = all_results[0] if all_results else None
 
     k1, k2, k3, k4, k5 = st.columns(5)
@@ -291,8 +292,11 @@ with t1:
                     f'<div class="metric-value" style="color:#00C805;">{len(bullish):,}</div></div>',
                     unsafe_allow_html=True)
     with k4:
+        bull_95 = sum(1 for r in high_conf if r["direction"] == "bullish")
+        bear_95 = sum(1 for r in high_conf if r["direction"] == "bearish")
         st.markdown(f'<div class="metric-card"><div class="metric-label">≥{config.ALERT_THRESHOLD:.0f}%</div>'
-                    f'<div class="metric-value" style="color:#00C805;">{len(high_conf):,}</div></div>',
+                    f'<div class="metric-value" style="color:#00C805;">{len(high_conf):,}</div>'
+                    f'<div style="font-size:0.68rem;color:rgba(255,255,255,0.45);">{bull_95} bull · {bear_95} bear</div></div>',
                     unsafe_allow_html=True)
     with k5:
         tc  = f"{top['confidence']:.1f}%" if top else "—"
@@ -319,9 +323,9 @@ with t1:
         )
         st.markdown("<br>", unsafe_allow_html=True)
 
-    # High-confidence alert cards — Robinhood-style
+    # High-confidence alert cards — Bullish & Bearish at 95%+
     if high_conf:
-        st.markdown(f"### High-Confidence Breakouts ≥ {config.ALERT_THRESHOLD:.0f}%")
+        st.markdown(f"### High-Confidence Alerts (Bullish & Bearish) ≥ {config.ALERT_THRESHOLD:.0f}%")
         for r in sorted(high_conf, key=lambda x: x["confidence"], reverse=True)[:10]:
             cls  = "alert-card" if r["direction"] == "bullish" else "alert-card-bear"
             col  = _cc(r["confidence"])
@@ -330,12 +334,26 @@ with t1:
                 f'<div style="font-size:0.76rem;color:rgba(255,255,255,0.6);margin-top:3px;">▸ {c}</div>'
                 for c in r["catalysts"][:3]
             )
+            cat_label = "Catalysts" if r["direction"] == "bullish" else "Risks"
+            profit_row = ""
+            if r.get("stop_loss") is not None and r.get("take_profit_1") is not None:
+                profit_row = f"""
+              <div style="margin-top:10px;padding:10px 14px;background:rgba(255,255,255,0.03);border-radius:10px;font-size:0.8rem;">
+                <span style="color:rgba(255,255,255,0.5);">Trade plan:</span>
+                <span style="color:#F23645;margin-left:8px;">SL ${r['stop_loss']:.2f}</span>
+                <span style="color:#00C805;margin-left:12px;">TP1 ${r['take_profit_1']:.2f}</span>
+                <span style="color:#00C805;margin-left:6px;">TP2 ${r['take_profit_2']:.2f}</span>
+                <span style="color:rgba(255,255,255,0.5);margin-left:12px;">S/R ${r.get('support',0):.2f} / ${r.get('resistance',0):.2f}</span>
+                <span style="color:rgba(255,255,255,0.5);margin-left:12px;">R:R 1:{r.get('risk_reward',2):.1f}</span>
+                <span style="color:rgba(255,255,255,0.5);margin-left:8px;">· {r.get('position_pct',2):.1f}% max</span>
+              </div>"""
             st.markdown(f"""
             <div class="{cls}">
               <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
                 <div>
                   <span style="font-size:1.25rem;font-weight:800;color:white;font-family:monospace;">{r['symbol']}</span>
                   <span style="font-size:0.78rem;color:rgba(255,255,255,0.5);margin-left:8px;">{r.get('name','')[:30]}</span>
+                  <span style="font-size:0.7rem;font-weight:600;color:{col};margin-left:8px;text-transform:uppercase;">{r['direction']}</span>
                 </div>
                 <div style="text-align:right;">
                   <div style="font-size:1.5rem;font-weight:800;color:{col};font-family:monospace;">{r['confidence']:.1f}%</div>
@@ -349,8 +367,9 @@ with t1:
                 <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">RSI</span>   <span style="color:#fff;font-weight:500;">{r['rsi']:.1f}</span>
                 <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">VOL</span>   <span style="color:#fff;font-weight:500;">{r['vol_ratio']:.1f}x</span>
               </div>
+              {profit_row}
               <div style="margin-top:6px;">{_badges(r['signals'])}</div>
-              {('<div style="margin-top:6px;">' + cats + '</div>') if r['catalysts'] else ''}
+              {('<div style="margin-top:6px;"><span style="font-size:0.7rem;color:rgba(255,255,255,0.45);">' + cat_label + ':</span>' + cats + '</div>') if r['catalysts'] else ''}
             </div>
             """, unsafe_allow_html=True)
         st.markdown("---")
@@ -429,8 +448,8 @@ with t1:
 # TAB 2 — ALERTS
 # ═══════════════════════════════════════════════════════════════════════════════
 with t2:
-    st.markdown("### 🚨 Alert History")
-    st.caption(f"Fired when confidence ≥ {config.ALERT_THRESHOLD:.0f}% · de-duped per 4 h per symbol")
+    st.markdown("### Alert History")
+    st.caption(f"Bullish & bearish alerts when confidence ≥ {config.ALERT_THRESHOLD:.0f}% · 4h throttle per symbol+direction")
 
     alerts = db.get_alerts(limit=200)
     if not alerts:
@@ -453,7 +472,8 @@ with t2:
                 c2.metric("Change", _fp(alert["change_pct"]))
                 c3.metric("Score",  f"{alert['score']:.0f}/100")
                 if alert["catalysts"]:
-                    st.markdown("**Catalysts:**")
+                    label = "Catalysts" if alert["direction"] == "bullish" else "Risks"
+                    st.markdown(f"**{label}:**")
                     for c in alert["catalysts"]:
                         st.markdown(f"- {c}")
                 st.caption(f"Direction: {alert['direction'].upper()} · Email: {'sent' if alert['email_sent'] else 'not sent'}")
@@ -572,7 +592,16 @@ with t3:
                     m3.metric("RSI",            f"{res['rsi']:.1f}")
                     m4.metric("Volume Ratio",   f"{res['vol_ratio']:.2f}x")
                     m5.metric("Direction",      res["direction"].upper())
+                    if res.get("stop_loss") is not None and res.get("take_profit_1") is not None:
+                        st.markdown("**Trade plan (ATR-based):**")
+                        p1, p2, p3, p4, p5 = st.columns(5)
+                        p1.metric("Stop-loss", f"${res['stop_loss']:.2f}")
+                        p2.metric("TP1", f"${res['take_profit_1']:.2f}")
+                        p3.metric("TP2", f"${res['take_profit_2']:.2f}")
+                        p4.metric("Support / Resistance", f"${res.get('support',0):.0f} / ${res.get('resistance',0):.0f}")
+                        p5.metric("R:R · Position", f"1:{res.get('risk_reward',2):.1f} · {res.get('position_pct',2):.1f}%")
                     if res["catalysts"]:
+                        st.markdown("**Catalysts / Risks:**")
                         for c in res["catalysts"]:
                             st.markdown(f"- {c}")
 

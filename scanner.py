@@ -165,17 +165,48 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
         else:
             direction = "neutral"
 
-        catalysts = [s["name"] for s in ind["signals"] if s["type"] == "bullish"][:3]
-        if ind["bb_squeeze"]:
-            catalysts.append("Bollinger Band Squeeze — big move imminent")
-        pos_news = [n for n in news if n["sentiment_label"] == "positive"]
-        if pos_news:
-            catalysts.append(f'Positive: "{pos_news[0]["title"][:55]}"')
+        # Catalysts (bullish) vs risks (bearish)
+        if direction == "bullish":
+            catalysts = [s["name"] for s in ind["signals"] if s["type"] == "bullish"][:3]
+            if ind["bb_squeeze"]:
+                catalysts.append("Bollinger Band Squeeze — big move imminent")
+            pos_news = [n for n in news if n["sentiment_label"] == "positive"]
+            if pos_news:
+                catalysts.append(f'Positive: "{pos_news[0]["title"][:55]}"')
+        else:
+            catalysts = [s["name"] for s in ind["signals"] if s["type"] == "bearish"][:3]
+            if ind["bb_squeeze"]:
+                catalysts.append("BB Squeeze — breakdown risk")
+            neg_news = [n for n in news if n["sentiment_label"] == "negative"]
+            if neg_news:
+                catalysts.append(f'Negative: "{neg_news[0]["title"][:55]}"')
+
+        # Profit-enhancing: stop-loss, take-profit, support/resistance, position size
+        price = quote.get("price", 0.0)
+        atr = ind["atr"] or (price * 0.02)
+        bb_lo = ind.get("bb_lower") or ind["sma20"] - atr
+        bb_up = ind.get("bb_upper") or ind["sma20"] + atr
+        if direction == "bullish":
+            stop_loss = round(price - 1.5 * atr, 2)
+            take_profit_1 = round(price + 2.0 * atr, 2)
+            take_profit_2 = round(price + 3.0 * atr, 2)
+            support = round(min(bb_lo, ind["sma20"]), 2)
+            resistance = round(max(bb_up, ind["sma50"]), 2)
+        else:
+            stop_loss = round(price + 1.5 * atr, 2)
+            take_profit_1 = round(price - 2.0 * atr, 2)
+            take_profit_2 = round(price - 3.0 * atr, 2)
+            support = round(bb_lo, 2)
+            resistance = round(max(ind["sma20"], bb_up), 2)
+        atr_pct = (atr / (price + 1e-9)) * 100
+        risk_reward = round(2.0 * atr / (1.5 * atr + 1e-9), 1)
+        # Lower vol = larger suggested position; cap at 5%
+        position_pct = min(5.0, max(1.0, round(3.0 / max(0.5, atr_pct), 1)))
 
         return {
             "symbol":          symbol,
             "name":            quote.get("name") or name,
-            "price":           quote.get("price", 0.0),
+            "price":           price,
             "change_pct":      quote.get("change_pct", 0.0),
             "volume":          quote.get("volume", 0),
             "avg_volume":      quote.get("avg_volume", 0),
@@ -187,7 +218,7 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             "macd_hist":       ind["macd_hist"],
             "vol_ratio":       ind["vol_ratio"],
             "bb_squeeze":      ind["bb_squeeze"],
-            "atr":             ind["atr"],
+            "atr":             atr,
             "sma20":           ind["sma20"],
             "sma50":           ind["sma50"],
             "sma200":          ind["sma200"],
@@ -196,6 +227,13 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             "news":            news[:5],
             "sentiment_score": sentiment_score,
             "scanned_at":      datetime.now(timezone.utc).isoformat(),
+            "stop_loss":       stop_loss,
+            "take_profit_1":   take_profit_1,
+            "take_profit_2":   take_profit_2,
+            "support":         support,
+            "resistance":      resistance,
+            "risk_reward":     risk_reward,
+            "position_pct":    position_pct,
         }
     except Exception as e:
         logger.debug(f"Analysis failed for {symbol}: {e}")
@@ -203,18 +241,21 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
 
 
 def _fire_alert_if_needed(result: dict) -> None:
-    """Check threshold and send email alert + DB record if warranted."""
+    """Check threshold and send email alert + DB record. Fires for BOTH bullish and bearish at 95%+."""
     if (result["confidence"] >= config.ALERT_THRESHOLD
-            and result["direction"] == "bullish"
-            and not db.already_alerted_recently(result["symbol"], hours=4)):
+            and not db.already_alerted_recently(result["symbol"], result["direction"], hours=4)):
 
-        logger.info(f"🚨 ALERT: {result['symbol']} at {result['confidence']:.1f}% confidence")
+        logger.info(f"🚨 ALERT: {result['symbol']} {result['direction'].upper()} at {result['confidence']:.1f}%")
         email_sent = send_alert_email(
             symbol=result["symbol"], name=result["name"],
             price=result["price"], change_pct=result["change_pct"],
             confidence=result["confidence"], score=result["final_score"],
             direction=result["direction"], catalysts=result["catalysts"],
             signals=result["signals"],
+            stop_loss=result.get("stop_loss"), take_profit_1=result.get("take_profit_1"),
+            take_profit_2=result.get("take_profit_2"), support=result.get("support"),
+            resistance=result.get("resistance"), risk_reward=result.get("risk_reward"),
+            position_pct=result.get("position_pct"),
         )
         db.save_alert(
             symbol=result["symbol"], name=result["name"],

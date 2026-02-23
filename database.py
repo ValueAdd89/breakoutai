@@ -80,12 +80,13 @@ def get_alerts(limit: int = 200) -> list[dict]:
     return out
 
 
-def already_alerted_recently(symbol: str, hours: int = 4) -> bool:
+def already_alerted_recently(symbol: str, direction: str = "bullish", hours: int = 4) -> bool:
+    """Check if we already alerted this symbol+direction recently (avoids spam, allows bull+bear separately)."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     with _lock, _conn() as c:
         row = c.execute(
-            "SELECT id FROM alerts WHERE symbol=? AND triggered_at > ? LIMIT 1",
-            (symbol, cutoff),
+            "SELECT id FROM alerts WHERE symbol=? AND direction=? AND triggered_at > ? LIMIT 1",
+            (symbol, direction, cutoff),
         ).fetchone()
     return row is not None
 
