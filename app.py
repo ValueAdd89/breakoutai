@@ -238,9 +238,10 @@ with t1:
 
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
-        universe_count = len(get_full_universe()) if all_results else "—"
+        universe_count = len(get_full_universe()) if all_results else 0
+        universe_display = f"{universe_count:,}" if universe_count else "—"
         st.markdown(f'<div class="metric-card"><div class="metric-label">Universe</div>'
-                    f'<div class="metric-value" style="color:#64748b;">{universe_count:,}</div></div>',
+                    f'<div class="metric-value" style="color:#64748b;">{universe_display}</div></div>',
                     unsafe_allow_html=True)
     with k2:
         st.markdown(f'<div class="metric-card"><div class="metric-label">Scanned</div>'
