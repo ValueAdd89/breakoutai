@@ -375,6 +375,197 @@ def compute_entry_exit(
     }
 
 
+def compute_option_play(
+    direction: str,
+    expiry_bucket: str,
+    price: float,
+    entry: float,
+    tp1: float,
+    tp2: float,
+    stop_loss: float,
+    atr: float,
+    confidence: float,
+    bb_squeeze: bool,
+    vol_ratio: float,
+    rsi: float,
+    iv_estimate: float | None = None,
+) -> dict:
+    """
+    Recommend a concrete options play based on the signal setup.
+
+    Returns a dict with:
+      strategy      — human label  e.g. "Long Call", "Call Debit Spread"
+      contract      — short code   e.g. "03/06 85c"
+      strike        — float
+      strike2       — float | None  (short leg for spreads)
+      expiry_str    — "MM/DD" string
+      expiry_date   — datetime.date
+      rationale     — one-line reason
+      max_profit    — "unlimited" | "$X.XX"
+      max_loss      — "premium paid" | "$X.XX"
+    """
+    from datetime import date, timedelta
+    import math
+
+    today = date.today()
+
+    # ── 1. Pick expiry date from bucket ───────────────────────────────────────
+    def _next_friday(n_weeks: int = 0) -> date:
+        """Return the next Friday (+ n_weeks weeks)."""
+        days_ahead = 4 - today.weekday()  # 4 = Friday
+        if days_ahead <= 0:
+            days_ahead += 7
+        return today + timedelta(days=days_ahead + n_weeks * 7)
+
+    def _monthly_opex(month_offset: int = 0) -> date:
+        """3rd Friday of target month."""
+        import calendar
+        year  = today.year + (today.month + month_offset - 1) // 12
+        month = (today.month + month_offset - 1) % 12 + 1
+        c = calendar.monthcalendar(year, month)
+        fridays = [week[4] for week in c if week[4] != 0]
+        opex_day = fridays[2]  # 3rd Friday
+        return date(year, month, opex_day)
+
+    bucket_map: dict[str, date] = {
+        "0dte":     today if today.weekday() < 5 else _next_friday(0),
+        "2dte":     _next_friday(0),
+        "weeklies": _next_friday(1),
+        "monthlies": _monthly_opex(1),
+        "yearly":   _monthly_opex(3),
+    }
+    expiry_date = bucket_map.get(expiry_bucket, _next_friday(1))
+    expiry_str  = expiry_date.strftime("%-m/%-d") if hasattr(expiry_date, "strftime") else expiry_date.strftime("%m/%d").lstrip("0")
+    # Windows-safe strftime (no %-m)
+    expiry_str = f"{expiry_date.month}/{expiry_date.day}"
+
+    dte = (expiry_date - today).days
+
+    # ── 2. Round strike to nearest standard increment ──────────────────────────
+    def _round_strike(px: float) -> float:
+        if px < 5:    inc = 0.50
+        elif px < 20:  inc = 1.0
+        elif px < 50:  inc = 1.0
+        elif px < 200: inc = 5.0
+        else:          inc = 10.0
+        return round(round(px / inc) * inc, 2)
+
+    # ── 3. Determine IV context (simple heuristic if not provided) ─────────────
+    if iv_estimate is None:
+        # Approximate IV from ATR: IV ≈ (ATR / price) * sqrt(252)
+        iv_estimate = round((atr / (price + 1e-9)) * (252 ** 0.5) * 100, 1)
+
+    high_iv = iv_estimate > 60    # high IV → prefer spreads to cap premium cost
+    low_dte = dte <= 2
+
+    # ── 4. Choose strategy ────────────────────────────────────────────────────
+    is_bull = direction == "bullish"
+    high_conf = confidence >= 75
+    explosive = bb_squeeze and vol_ratio >= 2.0
+
+    if explosive and not high_iv and not low_dte:
+        # Straddle when a big move is expected but direction uncertain
+        # But if direction is strong, stay directional
+        if confidence < 60:
+            strategy = "Straddle"
+        else:
+            strategy = "Long Call" if is_bull else "Long Put"
+    elif high_iv and high_conf:
+        strategy = "Call Debit Spread" if is_bull else "Put Debit Spread"
+    elif low_dte:
+        # 0/2 DTE — directional only, ATM
+        strategy = "Long Call" if is_bull else "Long Put"
+    elif is_bull:
+        strategy = "Long Call" if not high_iv else "Call Debit Spread"
+    else:
+        strategy = "Long Put" if not high_iv else "Put Debit Spread"
+
+    # ── 5. Set strikes ────────────────────────────────────────────────────────
+    if strategy in ("Long Call", "Long Put"):
+        # Slightly OTM (better leverage, defined risk)
+        otm_buffer = atr * 0.25
+        if strategy == "Long Call":
+            strike  = _round_strike(entry + otm_buffer)
+        else:
+            strike  = _round_strike(entry - otm_buffer)
+        strike2 = None
+
+        suffix = "c" if strategy == "Long Call" else "p"
+        contract = f"{expiry_str} ${strike:.0f}{suffix}"
+        max_profit = "Unlimited" if strategy == "Long Call" else f"~${abs(strike - 0):.0f} (stock → 0)"
+        max_loss   = "Premium paid"
+
+        # Rationale
+        if strategy == "Long Call":
+            target_move = round(tp1 - entry, 2)
+            rationale = (
+                f"OTM call on bullish breakout. Entry ${entry:.2f} → TP1 ${tp1:.2f} "
+                f"(+${target_move:.2f}). Expires {expiry_str}."
+            )
+        else:
+            target_move = round(entry - tp1, 2)
+            rationale = (
+                f"OTM put on bearish breakdown. Entry ${entry:.2f} → TP1 ${tp1:.2f} "
+                f"(−${target_move:.2f}). Expires {expiry_str}."
+            )
+
+    elif strategy in ("Call Debit Spread", "Put Debit Spread"):
+        otm_buffer = atr * 0.20
+        spread_width = _round_strike(abs(tp1 - entry) * 0.6)  # short leg near TP1
+        spread_width = max(spread_width, 2.5 if price < 50 else 5.0)
+
+        if strategy == "Call Debit Spread":
+            strike  = _round_strike(entry + otm_buffer)
+            strike2 = _round_strike(strike + spread_width)
+            suffix  = "c"
+        else:
+            strike  = _round_strike(entry - otm_buffer)
+            strike2 = _round_strike(strike - spread_width)
+            suffix  = "p"
+
+        contract   = f"{expiry_str} ${strike:.0f}/{strike2:.0f}{suffix}s"
+        max_profit = f"${abs(strike2 - strike):.2f} − premium"
+        max_loss   = "Net debit paid"
+        rationale  = (
+            f"{'Bull' if is_bull else 'Bear'} debit spread — caps cost in high-IV environment. "
+            f"Long ${strike:.0f} / Short ${strike2:.0f}. Expires {expiry_str}."
+        )
+
+    elif strategy == "Straddle":
+        strike  = _round_strike(price)   # ATM
+        strike2 = strike                  # same strike, both legs
+        contract   = f"{expiry_str} ${strike:.0f} straddle"
+        max_profit = "Unlimited"
+        max_loss   = "Net debit (both premiums)"
+        rationale  = (
+            f"BB squeeze + volume surge — big move expected but direction uncertain. "
+            f"ATM straddle at ${strike:.0f}. Expires {expiry_str}."
+        )
+    else:
+        # Fallback
+        strike  = _round_strike(entry)
+        strike2 = None
+        suffix  = "c" if is_bull else "p"
+        contract   = f"{expiry_str} ${strike:.0f}{suffix}"
+        max_profit = "Unlimited"
+        max_loss   = "Premium paid"
+        rationale  = f"Directional play on {direction} signal."
+
+    return {
+        "strategy":    strategy,
+        "contract":    contract,
+        "strike":      strike,
+        "strike2":     strike2,
+        "expiry_str":  expiry_str,
+        "expiry_date": expiry_date.isoformat(),
+        "rationale":   rationale,
+        "max_profit":  max_profit,
+        "max_loss":    max_loss,
+        "iv_estimate": iv_estimate,
+        "dte":         dte,
+    }
+
+
 def compute_sentiment_score(news: list[dict]) -> float:
     if not news:
         return 50.0

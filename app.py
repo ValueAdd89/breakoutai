@@ -413,6 +413,82 @@ def _stat_cell(label: str, value: str, color: str = "#fff") -> str:
     )
 
 
+def _option_play_html(r: dict) -> str:
+    """Render a compact option play recommendation chip + detail row."""
+    strategy = r.get("option_strategy")
+    contract = r.get("option_contract")
+    if not strategy or not contract:
+        return ""
+
+    is_bull    = r.get("direction") == "bullish"
+    dte        = r.get("option_dte", "")
+    rationale  = r.get("option_rationale", "")
+    max_profit = r.get("option_max_profit", "—")
+    max_loss   = r.get("option_max_loss", "—")
+    iv_est     = r.get("iv_estimate")
+    iv_str     = f"{iv_est:.0f}%" if iv_est else "—"
+
+    # Color coding per strategy
+    strat_colors: dict[str, str] = {
+        "Long Call":         "#00C805",
+        "Long Put":          "#F23645",
+        "Call Debit Spread": "#22c55e",
+        "Put Debit Spread":  "#ef4444",
+        "Straddle":          "#eab308",
+    }
+    chip_color = strat_colors.get(strategy, "#fff")
+
+    dte_label = f"{dte} DTE" if isinstance(dte, int) else ""
+
+    return (
+        '<div style="margin-top:12px;padding-top:12px;'
+        'border-top:1px solid rgba(255,255,255,0.05);">'
+
+        # Header row
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+        '<span style="font-size:0.6rem;font-weight:700;color:rgba(255,255,255,0.3);'
+        'letter-spacing:0.1em;text-transform:uppercase;">Options Play</span>'
+        f'<span style="background:{chip_color}22;border:1px solid {chip_color}55;'
+        f'color:{chip_color};font-size:0.68rem;font-weight:700;padding:2px 8px;'
+        f'border-radius:20px;">{strategy}</span>'
+        f'<span style="font-family:monospace;font-size:1rem;font-weight:900;'
+        f'color:#fff;letter-spacing:0.02em;">{contract}</span>'
+        + (f'<span style="font-size:0.65rem;color:rgba(255,255,255,0.3);">{dte_label}</span>' if dte_label else "") +
+        '</div>'
+
+        # Detail grid
+        '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;'
+        'background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);'
+        'border-radius:8px;overflow:hidden;">'
+
+        '<div style="padding:8px 10px;border-right:1px solid rgba(255,255,255,0.05);">'
+        '<div style="font-size:0.55rem;color:rgba(255,255,255,0.28);letter-spacing:0.07em;text-transform:uppercase;">Max Profit</div>'
+        f'<div style="font-size:0.82rem;font-weight:700;color:#00C805;margin-top:2px;">{max_profit}</div>'
+        '</div>'
+
+        '<div style="padding:8px 10px;border-right:1px solid rgba(255,255,255,0.05);">'
+        '<div style="font-size:0.55rem;color:rgba(255,255,255,0.28);letter-spacing:0.07em;text-transform:uppercase;">Max Loss</div>'
+        f'<div style="font-size:0.82rem;font-weight:700;color:#F23645;margin-top:2px;">{max_loss}</div>'
+        '</div>'
+
+        '<div style="padding:8px 10px;">'
+        '<div style="font-size:0.55rem;color:rgba(255,255,255,0.28);letter-spacing:0.07em;text-transform:uppercase;">Est. IV</div>'
+        f'<div style="font-size:0.82rem;font-weight:700;color:#eab308;margin-top:2px;">{iv_str}</div>'
+        '</div>'
+
+        '</div>'
+
+        # Rationale
+        + (
+            f'<div style="font-size:0.68rem;color:rgba(255,255,255,0.38);'
+            f'margin-top:7px;line-height:1.45;">{rationale}</div>'
+            if rationale else ""
+        ) +
+
+        '</div>'
+    )
+
+
 def _conf_bar(confidence: float, color: str) -> str:
     pct = min(100, confidence)
     return (
@@ -482,6 +558,7 @@ def _breakout_card_html(r: dict) -> str:
         + f'</div>'
 
         + _trade_plan_html(r)
+        + _option_play_html(r)
         + f'<div style="margin-top:10px;">{_badges(r["signals"])}</div>'
         + cats_section
         + f'</div>'
@@ -1079,6 +1156,7 @@ with t2:
             + f'</div>'
             + cat_html
             + trade_plan_html
+            + _option_play_html(r)
             + f'<div style="margin-top:8px;">{_badges(r["signals"][:4])}</div>'
             + f'</div>'
         )

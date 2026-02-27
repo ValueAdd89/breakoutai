@@ -25,7 +25,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import config
 import database as db
 from universe import get_screened_candidates, get_universe_names
-from data_engine import get_price_data, get_quote, fetch_news, compute_sentiment_score, compute_indicators, compute_entry_exit
+from data_engine import get_price_data, get_quote, fetch_news, compute_sentiment_score, compute_indicators, compute_entry_exit, compute_option_play
 from ml_model import get_confidence
 from alerts import send_alert_email
 
@@ -250,6 +250,30 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
         # Precise entry / exit levels derived from swing pivots, VWAP, BB, SMAs
         trade = compute_entry_exit(df, direction, price, atr)
 
+        # Assign expiry bucket first so option play can use it
+        expiry_signal = _assign_expiry_signal(
+            price=price, sma20=ind["sma20"], sma50=ind["sma50"], sma200=ind["sma200"],
+            bb_squeeze=ind["bb_squeeze"], vol_ratio=ind["vol_ratio"],
+            confidence=confidence, catalysts=catalysts, news=news,
+            sentiment_score=sentiment_score, macd_hist=ind["macd_hist"],
+        )
+
+        # Concrete options play recommendation
+        option_play = compute_option_play(
+            direction=direction,
+            expiry_bucket=expiry_signal,
+            price=price,
+            entry=trade["entry"],
+            tp1=trade["tp1"],
+            tp2=trade["tp2"],
+            stop_loss=trade["stop_loss"],
+            atr=atr,
+            confidence=confidence,
+            bb_squeeze=ind["bb_squeeze"],
+            vol_ratio=ind["vol_ratio"],
+            rsi=ind["rsi"],
+        )
+
         return {
             "symbol":          symbol,
             "name":            quote.get("name") or name,
@@ -294,12 +318,18 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             "vwap":            trade["vwap"],
             # keep old keys for backward compat with persisted results
             "risk_reward":     trade["rr2"],
-            "expiry_signal":   _assign_expiry_signal(
-                price=price, sma20=ind["sma20"], sma50=ind["sma50"], sma200=ind["sma200"],
-                bb_squeeze=ind["bb_squeeze"], vol_ratio=ind["vol_ratio"],
-                confidence=confidence, catalysts=catalysts, news=news,
-                sentiment_score=sentiment_score, macd_hist=ind["macd_hist"],
-            ),
+            "expiry_signal":   expiry_signal,
+            # ── Options play ──
+            "option_strategy": option_play["strategy"],
+            "option_contract": option_play["contract"],
+            "option_strike":   option_play["strike"],
+            "option_strike2":  option_play["strike2"],
+            "option_expiry":   option_play["expiry_str"],
+            "option_dte":      option_play["dte"],
+            "option_rationale": option_play["rationale"],
+            "option_max_profit": option_play["max_profit"],
+            "option_max_loss":  option_play["max_loss"],
+            "iv_estimate":     option_play["iv_estimate"],
         }
     except Exception as e:
         logger.debug(f"Analysis failed for {symbol}: {e}")
