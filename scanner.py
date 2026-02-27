@@ -198,9 +198,9 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
         )
         final_score = round(max(0.0, min(100.0, rule_score * 0.4 + confidence * 0.6)), 1)
 
-        if final_score >= 65 or confidence >= 65:
+        if final_score >= 55 or confidence >= 58:
             direction = "bullish"
-        elif final_score <= 35 or confidence <= 35:
+        elif final_score <= 42 or confidence <= 38:
             direction = "bearish"
         else:
             direction = "neutral"

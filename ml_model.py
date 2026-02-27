@@ -187,26 +187,80 @@ def train_model(force: bool = False) -> Pipeline:
 
 # ── Inference ─────────────────────────────────────────────────────────────────
 
+def _rule_based_confidence(feat: np.ndarray) -> float:
+    """
+    Lightweight heuristic confidence used when the ML model isn't ready yet.
+    Uses the same 18 features; returns a 0–100 score.
+    """
+    # feat indices: rsi_now(0), rsi_slope(1), macd_hist(2), macd_slope(3),
+    #   bb_squeeze(4), bb_pct(5), vol_ratio(6), vol_5d_ratio(7),
+    #   p_vs_20(8), p_vs_50(9), p_vs_200(10), sma20_slope(11),
+    #   atr_pct(12), ret5d(13), ret20d(14), pct52(15), obv_slope(16), bb_width(17)
+    score = 50.0
+    rsi        = feat[0]
+    macd_hist  = feat[2]
+    vol_ratio  = feat[6]
+    p_vs_20    = feat[8]
+    p_vs_50    = feat[9]
+    ret5d      = feat[13]
+    pct52      = feat[15]
+    obv_slope  = feat[16]
+
+    if 40 < rsi < 60:   score += 5
+    if rsi < 35:        score += 12
+    if rsi > 70:        score -= 10
+    if macd_hist > 0:   score += 10
+    else:               score -= 6
+    if vol_ratio > 2.0: score += 14
+    elif vol_ratio > 1.5: score += 8
+    elif vol_ratio < 0.7: score -= 8
+    if p_vs_20 > 0:     score += 6
+    if p_vs_50 > 0:     score += 5
+    if ret5d > 0.03:    score += 8
+    elif ret5d < -0.03: score -= 8
+    if pct52 > -0.02:   score += 8
+    if obv_slope > 0:   score += 5
+
+    return round(min(99.0, max(1.0, score)), 1)
+
+
 def get_confidence(df: pd.DataFrame) -> float:
-    """Return calibrated breakout probability 0–100."""
+    """
+    Return calibrated breakout probability 0–100.
+    Falls back to rule-based heuristic when the ML model is not yet trained,
+    so the scanner always produces meaningful scores.
+    """
     global _model
-    with _model_lock:
-        if _model is None:
-            try:
-                _model = train_model()
-            except Exception as e:
-                logger.error(f"Model unavailable: {e}")
-                return 0.0
 
     feat = extract_features(df)
     if feat is None:
         return 0.0
-    try:
-        prob = float(_model.predict_proba([feat])[0][1]) * 100
-        return round(min(99.9, max(0.1, prob)), 1)
-    except Exception as e:
-        logger.error(f"Inference error: {e}")
-        return 0.0
+
+    # Try ML model first (non-blocking check)
+    with _model_lock:
+        current_model = _model
+
+    if current_model is not None:
+        try:
+            prob = float(current_model.predict_proba([feat])[0][1]) * 100
+            return round(min(99.9, max(0.1, prob)), 1)
+        except Exception as e:
+            logger.error(f"Inference error: {e}")
+
+    # Model not ready — try loading from disk without blocking the training thread
+    if MODEL_PATH.exists():
+        try:
+            with open(MODEL_PATH, "rb") as f:
+                loaded = pickle.load(f)
+            with _model_lock:
+                _model = loaded
+            prob = float(loaded.predict_proba([feat])[0][1]) * 100
+            return round(min(99.9, max(0.1, prob)), 1)
+        except Exception:
+            pass
+
+    # Fall back to rule-based score so results still appear while training
+    return _rule_based_confidence(feat)
 
 
 def is_model_trained() -> bool:

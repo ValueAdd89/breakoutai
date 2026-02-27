@@ -463,7 +463,7 @@ with st.sidebar:
     st.markdown('<div style="font-size:0.75rem;font-weight:600;color:rgba(255,255,255,0.4);'
                 'letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">Filters</div>',
                 unsafe_allow_html=True)
-    min_conf        = st.slider("Min confidence %", 0, 100, 60, 5, key="min_conf")
+    min_conf        = st.slider("Min confidence %", 0, 100, 40, 5, key="min_conf")
     direction_filter = st.selectbox("Direction", ["All", "Bullish only", "Bearish only"], key="dir_filter")
     min_vol_ratio   = st.slider("Min volume ratio", 0.0, 5.0, 0.0, 0.5, key="min_vol")
     max_results     = st.select_slider("Show top N", [25, 50, 100, 200], value=50, key="top_n")
@@ -761,6 +761,36 @@ with t1:
     if auto:
         time.sleep(60)
         st.rerun()
+
+    # Diagnostics expander
+    with st.expander("🔍 Scanner diagnostics"):
+        _p = scanner.get_scan_progress()
+        _model_ready = is_model_trained()
+        st.markdown(f"""
+| Setting | Value |
+|---------|-------|
+| ML model | {"✅ trained (ML scores active)" if _model_ready else "⏳ training in background (rule-based fallback active)"} |
+| Scanner state | {"🟢 Running — phase: **" + _p.get("phase","?") + "**" if _p["running"] else "⚪ Idle"} |
+| Results in memory | {len(all_results):,} total · {len(filtered):,} matching current filters |
+| Min confidence filter | {min_conf}% (lower this if no results show) |
+| Direction filter | {direction_filter} |
+| Min vol ratio | {min_vol_ratio}x |
+| Bullish in memory | {sum(1 for r in all_results if r["direction"]=="bullish"):,} |
+| Bearish in memory | {sum(1 for r in all_results if r["direction"]=="bearish"):,} |
+| Neutral in memory | {sum(1 for r in all_results if r["direction"]=="neutral"):,} |
+| Confidence range | {f'{min(r["confidence"] for r in all_results):.1f}% – {max(r["confidence"] for r in all_results):.1f}%' if all_results else "—"} |
+        """)
+        if all_results and not filtered:
+            st.warning(
+                f"⚠️ There are **{len(all_results):,}** results in memory but **0** pass the current filters. "
+                f"Try lowering the **Min confidence %** slider (currently {min_conf}%) or changing the direction filter."
+            )
+        if not _model_ready:
+            st.info(
+                "The ML model is still training in the background (takes 2–3 min on first run). "
+                "Until then, confidence scores are rule-based and tend to cluster around 50–65%. "
+                "Results will improve automatically once training completes."
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
