@@ -44,18 +44,20 @@ def init_db() -> None:
             price      REAL,
             scanned_at TEXT NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_alerts_symbol ON alerts(symbol);
+        CREATE INDEX IF NOT EXISTS idx_alerts_time   ON alerts(triggered_at);
+        CREATE INDEX IF NOT EXISTS idx_scan_symbol   ON scan_log(symbol);
+        """)
+        # Migrate: add scan_results table if it doesn't exist yet
+        c.execute("""
         CREATE TABLE IF NOT EXISTS scan_results (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol     TEXT NOT NULL,
             payload    TEXT NOT NULL,
             scanned_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_alerts_symbol  ON alerts(symbol);
-        CREATE INDEX IF NOT EXISTS idx_alerts_time    ON alerts(triggered_at);
-        CREATE INDEX IF NOT EXISTS idx_scan_symbol    ON scan_log(symbol);
-        CREATE INDEX IF NOT EXISTS idx_results_symbol ON scan_results(symbol);
-        CREATE INDEX IF NOT EXISTS idx_results_time   ON scan_results(scanned_at);
-        """)
+        )""")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_results_symbol ON scan_results(symbol)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_results_time   ON scan_results(scanned_at)")
 
 
 def save_alert(
@@ -140,12 +142,23 @@ def load_scan_results() -> tuple[list[dict], Optional[str]]:
     """
     Load the most recently persisted scan results from SQLite.
     Returns (results_list, scanned_at_iso_string).
-    Returns ([], None) if nothing is stored yet.
+    Returns ([], None) if nothing is stored yet or the table doesn't exist.
     """
-    with _lock, _conn() as c:
-        rows = c.execute(
-            "SELECT payload, scanned_at FROM scan_results ORDER BY id ASC"
-        ).fetchall()
+    try:
+        with _lock, _conn() as c:
+            # Ensure table exists even if init_db wasn't called yet
+            c.execute("""
+            CREATE TABLE IF NOT EXISTS scan_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                scanned_at TEXT NOT NULL
+            )""")
+            rows = c.execute(
+                "SELECT payload, scanned_at FROM scan_results ORDER BY id ASC"
+            ).fetchall()
+    except Exception:
+        return [], None
     if not rows:
         return [], None
     results = []
