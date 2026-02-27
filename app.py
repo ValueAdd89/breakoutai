@@ -425,11 +425,16 @@ with st.sidebar:
     else:
         dot = '<span class="idle-dot"></span>'
         status_color = "rgba(255,255,255,0.5)"
+        last_scan_html = (
+            f'<div style="font-size:0.7rem;color:rgba(255,255,255,0.3);margin-top:4px;">'
+            f'Last: {last_scan.strftime("%b %d %H:%M UTC")}</div>'
+            if last_scan else ""
+        )
         st.markdown(
             f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);'
             f'border-radius:10px;padding:10px 12px;margin-bottom:12px;">'
             f'{dot}<span style="color:{status_color};font-size:0.82rem;">Scanner idle</span>'
-            f'{"<div style=\\"font-size:0.7rem;color:rgba(255,255,255,0.3);margin-top:4px;\\">Last: " + last_scan.strftime("%b %d %H:%M UTC") + "</div>" if last_scan else ""}'
+            f'{last_scan_html}'
             f'</div>',
             unsafe_allow_html=True,
         )
