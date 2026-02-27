@@ -258,7 +258,7 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             sentiment_score=sentiment_score, macd_hist=ind["macd_hist"],
         )
 
-        # Concrete options play recommendation
+        # Concrete options play recommendation — uses real expiry chain from yfinance
         option_play = compute_option_play(
             direction=direction,
             expiry_bucket=expiry_signal,
@@ -272,6 +272,7 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             bb_squeeze=ind["bb_squeeze"],
             vol_ratio=ind["vol_ratio"],
             rsi=ind["rsi"],
+            symbol=symbol,
         )
 
         return {

@@ -420,16 +420,29 @@ def _option_play_html(r: dict) -> str:
     if not strategy or not contract:
         return ""
 
-    is_bull    = r.get("direction") == "bullish"
     dte        = r.get("option_dte", "")
     rationale  = r.get("option_rationale", "")
     max_profit = r.get("option_max_profit", "—")
     max_loss   = r.get("option_max_loss", "—")
     iv_est     = r.get("iv_estimate")
     iv_str     = f"{iv_est:.0f}%" if iv_est else "—"
+    expiry_iso = r.get("option_expiry", "")
+
+    # Build a friendly expiry label: "3/14 (7 DTE)" or "3/14 · live chain"
+    if isinstance(dte, int) and dte >= 0:
+        dte_label = f"{dte} DTE"
+        # Mark as live-chain date if we fetched it from yfinance options
+        chain_badge = (
+            '<span style="font-size:0.55rem;background:rgba(0,200,5,0.12);'
+            'border:1px solid rgba(0,200,5,0.3);color:#00C805;padding:1px 6px;'
+            'border-radius:10px;margin-left:4px;">live chain</span>'
+        )
+    else:
+        dte_label   = ""
+        chain_badge = ""
 
     # Color coding per strategy
-    strat_colors: dict[str, str] = {
+    strat_colors: dict = {
         "Long Call":         "#00C805",
         "Long Put":          "#F23645",
         "Call Debit Spread": "#22c55e",
@@ -438,13 +451,10 @@ def _option_play_html(r: dict) -> str:
     }
     chip_color = strat_colors.get(strategy, "#fff")
 
-    dte_label = f"{dte} DTE" if isinstance(dte, int) else ""
-
     return (
         '<div style="margin-top:12px;padding-top:12px;'
         'border-top:1px solid rgba(255,255,255,0.05);">'
 
-        # Header row
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
         '<span style="font-size:0.6rem;font-weight:700;color:rgba(255,255,255,0.3);'
         'letter-spacing:0.1em;text-transform:uppercase;">Options Play</span>'
@@ -453,10 +463,10 @@ def _option_play_html(r: dict) -> str:
         f'border-radius:20px;">{strategy}</span>'
         f'<span style="font-family:monospace;font-size:1rem;font-weight:900;'
         f'color:#fff;letter-spacing:0.02em;">{contract}</span>'
-        + (f'<span style="font-size:0.65rem;color:rgba(255,255,255,0.3);">{dte_label}</span>' if dte_label else "") +
+        + (f'<span style="font-size:0.65rem;color:rgba(255,255,255,0.35);">{dte_label}</span>' if dte_label else "")
+        + chain_badge +
         '</div>'
 
-        # Detail grid
         '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;'
         'background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);'
         'border-radius:8px;overflow:hidden;">'
@@ -478,7 +488,6 @@ def _option_play_html(r: dict) -> str:
 
         '</div>'
 
-        # Rationale
         + (
             f'<div style="font-size:0.68rem;color:rgba(255,255,255,0.38);'
             f'margin-top:7px;line-height:1.45;">{rationale}</div>'

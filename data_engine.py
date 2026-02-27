@@ -377,6 +377,74 @@ def compute_entry_exit(
     }
 
 
+_expiry_cache: TTLCache = TTLCache(maxsize=300, ttl=3_600)   # 1-hour cache per symbol
+
+
+def get_option_expiries(symbol: str) -> list:
+    """
+    Fetch real option expiration dates from yfinance (same chain Robinhood uses).
+    Returns a list of datetime.date objects sorted ascending, or [] on failure.
+    Cached for 1 hour — expiry chains don't change intraday.
+    """
+    key = f"expiries_{symbol}"
+    if key in _expiry_cache:
+        return _expiry_cache[key]
+    try:
+        raw = yf.Ticker(symbol).options          # tuple of "YYYY-MM-DD" strings
+        expiries = sorted(
+            date.fromisoformat(d) for d in raw
+            if date.fromisoformat(d) >= date.today()
+        )
+        _expiry_cache[key] = expiries
+        return expiries
+    except Exception as e:
+        logger.debug(f"Option expiries fetch failed for {symbol}: {e}")
+        _expiry_cache[key] = []
+        return []
+
+
+def _pick_expiry_from_chain(
+    expiries: list,
+    bucket: str,
+) -> Optional[date]:
+    """
+    Select the best real expiry date from the live chain for a given bucket.
+
+    Bucket → target DTE range:
+      0dte      → today (0 DTE) or nearest next session
+      2dte      → 1–4 DTE
+      weeklies  → 5–10 DTE
+      monthlies → 25–45 DTE
+      yearly    → 60–120 DTE
+    """
+    if not expiries:
+        return None
+
+    today = date.today()
+
+    targets: dict = {
+        "0dte":      (0, 1),
+        "2dte":      (1, 4),
+        "weeklies":  (5, 14),
+        "monthlies": (21, 50),
+        "yearly":    (55, 130),
+    }
+    lo, hi = targets.get(bucket, (5, 14))
+
+    # Prefer an expiry whose DTE falls in the ideal range
+    in_range = [e for e in expiries if lo <= (e - today).days <= hi]
+    if in_range:
+        return in_range[0]   # nearest in range
+
+    # Fall back to the nearest expiry at or after the lower bound
+    at_or_after = [e for e in expiries if (e - today).days >= lo]
+    if at_or_after:
+        return at_or_after[0]
+
+    # Last resort: the nearest available expiry
+    return expiries[0]
+
+
 def compute_option_play(
     direction: str,
     expiry_bucket: str,
@@ -390,48 +458,55 @@ def compute_option_play(
     bb_squeeze: bool,
     vol_ratio: float,
     rsi: float,
+    symbol: str = "",
     iv_estimate: Optional[float] = None,
 ) -> dict:
     """
     Recommend a concrete options play based on the signal setup.
+    Uses real option expiry dates from the live options chain (same as Robinhood).
 
     Returns a dict with:
       strategy      — human label  e.g. "Long Call", "Call Debit Spread"
-      contract      — short code   e.g. "03/06 85c"
+      contract      — short code   e.g. "3/6 $85c"
       strike        — float
       strike2       — float | None  (short leg for spreads)
-      expiry_str    — "MM/DD" string
+      expiry_str    — "M/D" string matching the real chain
       expiry_date   — date ISO string
       rationale     — one-line reason
-      max_profit    — "unlimited" | "$X.XX"
-      max_loss      — "premium paid" | "$X.XX"
+      max_profit    — "Unlimited" | "$X.XX − premium"
+      max_loss      — "Premium paid" | "Net debit paid"
     """
     today = date.today()
 
-    # ── 1. Pick expiry date from bucket ───────────────────────────────────────
-    def _next_friday(n_weeks: int = 0) -> date:
-        days_ahead = 4 - today.weekday()   # 4 = Friday
-        if days_ahead <= 0:
-            days_ahead += 7
-        return today + timedelta(days=days_ahead + n_weeks * 7)
+    # ── 1. Fetch real expiry dates; fall back to synthetic if unavailable ─────
+    real_expiries = get_option_expiries(symbol) if symbol else []
+    expiry_date = _pick_expiry_from_chain(real_expiries, expiry_bucket)
 
-    def _monthly_opex(month_offset: int = 0) -> date:
-        year  = today.year + (today.month + month_offset - 1) // 12
-        month = (today.month + month_offset - 1) % 12 + 1
-        cal   = calendar.monthcalendar(year, month)
-        fridays = [week[4] for week in cal if week[4] != 0]
-        return date(year, month, fridays[2])   # 3rd Friday = monthly OPEX
+    if expiry_date is None:
+        # Synthetic fallback (same logic as before) when chain is unavailable
+        def _next_friday(n: int = 0) -> date:
+            d = 4 - today.weekday()
+            if d <= 0:
+                d += 7
+            return today + timedelta(days=d + n * 7)
 
-    bucket_map: dict = {
-        "0dte":      today if today.weekday() < 5 else _next_friday(0),
-        "2dte":      _next_friday(0),
-        "weeklies":  _next_friday(1),
-        "monthlies": _monthly_opex(1),
-        "yearly":    _monthly_opex(3),
-    }
-    expiry_date = bucket_map.get(expiry_bucket, _next_friday(1))
-    expiry_str  = f"{expiry_date.month}/{expiry_date.day}"
+        def _monthly_opex(mo: int = 0) -> date:
+            yr  = today.year + (today.month + mo - 1) // 12
+            mn  = (today.month + mo - 1) % 12 + 1
+            cal = calendar.monthcalendar(yr, mn)
+            fri = [w[4] for w in cal if w[4] != 0]
+            return date(yr, mn, fri[2])
 
+        fallback_map: dict = {
+            "0dte":      today if today.weekday() < 5 else _next_friday(0),
+            "2dte":      _next_friday(0),
+            "weeklies":  _next_friday(1),
+            "monthlies": _monthly_opex(1),
+            "yearly":    _monthly_opex(3),
+        }
+        expiry_date = fallback_map.get(expiry_bucket, _next_friday(1))
+
+    expiry_str = f"{expiry_date.month}/{expiry_date.day}"
     dte = (expiry_date - today).days
 
     # ── 2. Round strike to nearest standard increment ──────────────────────────
