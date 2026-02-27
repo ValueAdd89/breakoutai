@@ -62,8 +62,14 @@ def get_price_data(symbol: str, period: str = "1y") -> pd.DataFrame:
     df = yf.Ticker(symbol).history(period=period, auto_adjust=True)
     if df.empty:
         raise ValueError(f"No price data for {symbol}")
+    # Flatten MultiIndex columns if present (yfinance >= 0.2.38 with single ticker)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [c[0] for c in df.columns]
     df.columns = [c.lower() for c in df.columns]
-    df = df[["open", "high", "low", "close", "volume"]].dropna()
+    needed = [c for c in ["open", "high", "low", "close", "volume"] if c in df.columns]
+    if len(needed) < 4:
+        raise ValueError(f"Unexpected columns for {symbol}: {list(df.columns)}")
+    df = df[needed].dropna()
     _price_cache[key] = df
     return df
 
@@ -75,8 +81,12 @@ def get_quote(symbol: str) -> dict:
     hist = yf.Ticker(symbol).history(period="5d", auto_adjust=True)
     if hist.empty:
         raise ValueError(f"No quote data for {symbol}")
-    current = float(hist["Close"].iloc[-1])
-    prev    = float(hist["Close"].iloc[-2]) if len(hist) > 1 else current
+    if isinstance(hist.columns, pd.MultiIndex):
+        hist.columns = [c[0] for c in hist.columns]
+    # Normalize to lowercase
+    hist.columns = [c.lower() for c in hist.columns]
+    current = float(hist["close"].iloc[-1])
+    prev    = float(hist["close"].iloc[-2]) if len(hist) > 1 else current
     change_pct = (current - prev) / (prev + 1e-9) * 100
     result = {
         "symbol":     symbol,
@@ -84,8 +94,8 @@ def get_quote(symbol: str) -> dict:
         "price":      round(current, 2),
         "change":     round(current - prev, 2),
         "change_pct": round(change_pct, 2),
-        "volume":     int(hist["Volume"].iloc[-1]),
-        "avg_volume": int(hist["Volume"].mean()),
+        "volume":     int(hist["volume"].iloc[-1]),
+        "avg_volume": int(hist["volume"].mean()),
     }
     _price_cache[key] = result
     return result

@@ -151,38 +151,61 @@ def get_universe_names() -> dict[str, str]:
 
 # ── Fast pre-screener ─────────────────────────────────────────────────────────
 
+def _extract_col(raw: pd.DataFrame, field: str, sym: str) -> pd.Series:
+    """
+    Safely extract a single-symbol series from a yfinance download DataFrame.
+    Handles both the old single-level API and the new MultiIndex API
+    introduced in yfinance ≥ 0.2.38.
+    """
+    cols = raw.columns
+    # New yfinance: MultiIndex (field, ticker) — swap to (ticker, field)
+    if isinstance(cols, pd.MultiIndex):
+        if (field, sym) in cols:
+            return raw[(field, sym)]
+        # Try case-insensitive field match
+        for f, t in cols:
+            if f.lower() == field.lower() and t == sym:
+                return raw[(f, t)]
+        return pd.Series(dtype=float)
+
+    # Single ticker download: columns are plain field names
+    if field in cols:
+        return raw[field]
+    for c in cols:
+        if c.lower() == field.lower():
+            return raw[c]
+    return pd.Series(dtype=float)
+
+
 def _batch_screen(symbols: list[str], min_price: float, min_volume: int) -> list[str]:
     """
     Download 5-day OHLCV for up to 100 symbols at once using yfinance batch.
     Filters out illiquid / penny stocks. Returns symbols that pass.
+    Compatible with both old and new yfinance column layouts.
     """
+    if not symbols:
+        return []
     try:
         raw = yf.download(
             symbols,
             period="5d",
             auto_adjust=True,
             progress=False,
-            threads=True,
-            group_by="ticker",
         )
+        if raw.empty:
+            return []
+
         passed = []
         for sym in symbols:
             try:
-                if len(symbols) == 1:
-                    close_col = raw["Close"]
-                    vol_col   = raw["Volume"]
-                else:
-                    close_col = raw["Close"][sym]
-                    vol_col   = raw["Volume"][sym]
-
-                close_col = close_col.dropna()
-                vol_col   = vol_col.dropna()
+                close_col = _extract_col(raw, "Close", sym).dropna()
+                vol_col   = _extract_col(raw, "Volume", sym).dropna()
 
                 if close_col.empty or vol_col.empty:
                     continue
 
-                last_price  = float(close_col.iloc[-1])
-                avg_volume  = float(vol_col.mean())
+                last_price = float(close_col.iloc[-1])
+                avg_volume = float(vol_col.mean())
 
                 if last_price >= min_price and avg_volume >= min_volume:
                     passed.append(sym)
@@ -192,6 +215,22 @@ def _batch_screen(symbols: list[str], min_price: float, min_volume: int) -> list
     except Exception as e:
         logger.warning(f"Batch screen error: {e}")
         return []
+
+
+# Hardcoded fallback — used when yfinance batch download fails entirely.
+# These are all highly liquid, large-cap symbols guaranteed to have data.
+_FALLBACK_CANDIDATES = [
+    "AAPL","MSFT","GOOGL","AMZN","NVDA","META","TSLA","BRK-B","JPM","V",
+    "UNH","XOM","JNJ","WMT","MA","PG","LLY","HD","CVX","MRK",
+    "ABBV","PEP","KO","AVGO","COST","ADBE","CSCO","TMO","ACN","MCD",
+    "ABT","CRM","DHR","NKE","LIN","ORCL","TXN","NEE","PM","BMY",
+    "RTX","QCOM","AMGN","HON","SPGI","IBM","GE","CAT","UPS","BA",
+    "AMD","INTC","NFLX","PYPL","SQ","SHOP","COIN","UBER","SNAP","PLTR",
+    "SOFI","HOOD","RIVN","LCID","NIO","MSTR","MARA","RIOT","IONQ","SOUN",
+    "SPY","QQQ","IWM","DIA","GLD","SLV","USO",
+    "BAC","GS","MS","C","WFC","BLK","SCHW","AXP",
+    "ENPH","FSLR","SEDG","RUN","SMCI","ARM","TSM",
+]
 
 
 def get_screened_candidates(
@@ -205,6 +244,7 @@ def get_screened_candidates(
                 filters by price ≥ min_price and avg volume ≥ min_avg_volume
       Stage 2 — returns the passing symbols, typically 400-800 of ~3000
 
+    Falls back to _FALLBACK_CANDIDATES if the full universe or batch download fails.
     Cached for 30 minutes.
     """
     cache_key = f"screened_{min_price}_{min_avg_volume}"
@@ -213,6 +253,10 @@ def get_screened_candidates(
         return _screened_cache[cache_key]
 
     all_symbols = get_universe_symbols()
+    if not all_symbols:
+        logger.warning("Universe fetch returned 0 symbols — using hardcoded fallback list")
+        all_symbols = _FALLBACK_CANDIDATES
+
     logger.info(f"Pre-screening {len(all_symbols)} symbols (price≥${min_price}, vol≥{min_avg_volume:,})…")
 
     passed: list[str] = []
@@ -222,6 +266,12 @@ def get_screened_candidates(
         passed.extend(ok)
         logger.info(f"  Screened {min(i+batch_size, len(all_symbols))}/{len(all_symbols)} — {len(passed)} passing so far")
 
-    logger.info(f"Pre-screen complete: {len(passed)}/{len(all_symbols)} candidates")
+    # If batch screener produced nothing (yfinance API issue), skip the filter
+    # and return the full list so the analyzer can still run on known-good symbols
+    if not passed:
+        logger.warning("Batch screener returned 0 — skipping filter, using full symbol list as candidates")
+        passed = all_symbols if len(all_symbols) <= 200 else _FALLBACK_CANDIDATES
+
+    logger.info(f"Pre-screen complete: {len(passed)} candidates")
     _screened_cache[cache_key] = passed
     return passed
