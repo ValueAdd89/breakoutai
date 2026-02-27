@@ -1231,30 +1231,82 @@ with t3:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
+        # Build a lookup of the latest scan results so we can enrich alerts
+        # with trade plan + option play data from the most recent scan.
+        _latest = scanner.get_latest_results()
+        _scan_lookup: dict = {r["symbol"]: r for r in _latest}
+
         # Timeline
         for alert in alerts:
             ts  = alert["triggered_at"][:19].replace("T", " ")
-            col = _cc(alert["confidence"])
-            cc  = "#00C805" if alert["change_pct"] >= 0 else "#F23645"
             ei  = "📧" if alert["email_sent"] else ""
-            dir_badge = _dir_badge(alert["direction"])
+
             with st.expander(
                 f"{'▲' if alert['direction']=='bullish' else '▼'}  {alert['symbol']}  —  "
                 f"{alert['confidence']:.1f}%  ·  {ts}  {ei}"
             ):
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Price",      f"${alert['price']:.2f}")
-                m2.metric("Change",     _fp(alert["change_pct"]))
-                m3.metric("Score",      f"{alert['score']:.0f}/100")
-                m4.metric("Confidence", f"{alert['confidence']:.1f}%")
-                if alert["catalysts"]:
-                    label = "Catalysts" if alert["direction"] == "bullish" else "Risks"
-                    st.markdown(f"**{label}:**")
-                    for c in alert["catalysts"]:
-                        st.markdown(f"- {c}")
+                # Merge alert data with the latest scan result for this symbol
+                # (scan result has trade plan + option play; alert has the
+                # snapshot price/score at trigger time which we preserve).
+                scan_r = _scan_lookup.get(alert["symbol"], {})
+                merged = {
+                    **scan_r,
+                    # Always show the alert-time values for the key fields
+                    "symbol":     alert["symbol"],
+                    "name":       alert.get("name", scan_r.get("name", alert["symbol"])),
+                    "price":      alert["price"],
+                    "change_pct": alert["change_pct"],
+                    "confidence": alert["confidence"],
+                    "final_score": alert.get("score", scan_r.get("final_score", 0.0)),
+                    "direction":  alert["direction"],
+                    "catalysts":  alert.get("catalysts") or scan_r.get("catalysts", []),
+                    "signals":    scan_r.get("signals", []),
+                    "rsi":        scan_r.get("rsi", 50.0),
+                    "vol_ratio":  scan_r.get("vol_ratio", 1.0),
+                }
+
+                if scan_r:
+                    # Full rich card with trade plan + option play
+                    st.markdown(_breakout_card_html(merged), unsafe_allow_html=True)
+                else:
+                    # Fallback — scan result not available, show plain metrics
+                    col = _cc(alert["confidence"])
+                    cc  = "#00C805" if alert["change_pct"] >= 0 else "#F23645"
+                    st.markdown(
+                        f'<div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);'
+                        f'border-radius:12px;padding:16px 18px;">'
+                        f'<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">'
+                        f'<div>{_dir_badge(alert["direction"])}</div>'
+                        f'<div style="display:flex;flex-direction:column;">'
+                        f'<span style="font-size:0.58rem;color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:0.07em;">Price at trigger</span>'
+                        f'<span style="font-size:0.95rem;font-weight:700;color:#fff;">${alert["price"]:.2f} '
+                        f'<span style="color:{cc};font-size:0.8rem;">{_fp(alert["change_pct"])}</span></span>'
+                        f'</div>'
+                        f'<div style="display:flex;flex-direction:column;">'
+                        f'<span style="font-size:0.58rem;color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:0.07em;">Score</span>'
+                        f'<span style="font-size:0.95rem;font-weight:700;color:#fff;">{alert.get("score",0):.0f}/100</span>'
+                        f'</div>'
+                        f'<div style="display:flex;flex-direction:column;">'
+                        f'<span style="font-size:0.58rem;color:rgba(255,255,255,0.3);text-transform:uppercase;letter-spacing:0.07em;">Confidence</span>'
+                        f'<span style="font-size:0.95rem;font-weight:800;color:{col};">{alert["confidence"]:.1f}%</span>'
+                        f'</div>'
+                        f'</div>'
+                        + (
+                            '<div style="margin-top:10px;font-size:0.75rem;color:rgba(255,255,255,0.35);">'
+                            'Run a new scan to load full trade plan &amp; option play for this symbol.</div>'
+                        ) +
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if alert["catalysts"]:
+                        label = "Catalysts" if alert["direction"] == "bullish" else "Risks"
+                        st.markdown(f"**{label}:**")
+                        for cat in alert["catalysts"]:
+                            st.markdown(f"- {cat}")
+
                 st.caption(
-                    f"Direction: {alert['direction'].upper()} · "
-                    f"Email: {'sent ✓' if alert['email_sent'] else 'not sent'} · {ts} UTC"
+                    f"Triggered: {ts} UTC · "
+                    f"Email: {'sent ✓' if alert['email_sent'] else 'not sent'}"
                 )
 
         st.markdown("---")
