@@ -329,55 +329,136 @@ def _dir_badge(d: str) -> str:
 def _trade_plan_html(r: dict) -> str:
     if r.get("stop_loss") is None or r.get("take_profit_1") is None:
         return ""
+    def _tp_cell(label: str, val: str, color: str) -> str:
+        return (
+            f'<div style="display:flex;flex-direction:column;gap:2px;">'
+            f'  <div style="font-size:0.58rem;color:rgba(255,255,255,0.3);'
+            f'letter-spacing:0.07em;text-transform:uppercase;">{label}</div>'
+            f'  <div style="font-size:0.85rem;font-weight:700;color:{color};">{val}</div>'
+            f'</div>'
+        )
     return (
-        f'<div class="trade-plan">'
-        f'<span style="color:rgba(255,255,255,0.4);">Trade plan</span>'
-        f'<span style="color:#F23645;">SL&nbsp;${r["stop_loss"]:.2f}</span>'
-        f'<span style="color:#00C805;">TP1&nbsp;${r["take_profit_1"]:.2f}</span>'
-        f'<span style="color:#00C805;">TP2&nbsp;${r["take_profit_2"]:.2f}</span>'
-        f'<span style="color:rgba(255,255,255,0.4);">S/R&nbsp;${r.get("support",0):.0f}&nbsp;/&nbsp;${r.get("resistance",0):.0f}</span>'
-        f'<span style="color:rgba(255,255,255,0.4);">R:R&nbsp;1:{r.get("risk_reward",2):.1f}</span>'
-        f'<span style="color:rgba(255,255,255,0.4);">{r.get("position_pct",2):.1f}%&nbsp;max</span>'
+        f'<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:0;'
+        f'margin-top:12px;background:rgba(255,255,255,0.025);'
+        f'border:1px solid rgba(255,255,255,0.06);border-radius:10px;overflow:hidden;">'
+        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
+        f'{_tp_cell("Stop Loss", f"${r[\"stop_loss\"]:.2f}", "#F23645")}</div>'
+        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
+        f'{_tp_cell("TP 1", f"${r[\"take_profit_1\"]:.2f}", "#00C805")}</div>'
+        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
+        f'{_tp_cell("TP 2", f"${r[\"take_profit_2\"]:.2f}", "#00C805")}</div>'
+        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
+        f'{_tp_cell("Support", f"${r.get(\"support\",0):.0f}", "rgba(255,255,255,0.6)")}</div>'
+        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
+        f'{_tp_cell("Resistance", f"${r.get(\"resistance\",0):.0f}", "rgba(255,255,255,0.6)")}</div>'
+        f'<div style="padding:9px 11px;">'
+        f'{_tp_cell("R:R / Size", f"1:{r.get(\"risk_reward\",2):.1f} · {r.get(\"position_pct\",2):.1f}%", "rgba(255,255,255,0.6)")}</div>'
         f'</div>'
     )
 
+def _stat_cell(label: str, value: str, color: str = "#fff") -> str:
+    return (
+        f'<div style="display:flex;flex-direction:column;gap:3px;">'
+        f'  <div style="font-size:0.6rem;color:rgba(255,255,255,0.35);'
+        f'letter-spacing:0.08em;text-transform:uppercase;">{label}</div>'
+        f'  <div style="font-size:0.92rem;font-weight:700;color:{color};">{value}</div>'
+        f'</div>'
+    )
+
+
+def _conf_bar(confidence: float, color: str) -> str:
+    pct = min(100, confidence)
+    return (
+        f'<div style="background:rgba(255,255,255,0.07);border-radius:4px;'
+        f'height:3px;margin-top:6px;width:100%;">'
+        f'  <div style="width:{pct}%;height:100%;background:{color};'
+        f'border-radius:4px;transition:width 0.4s ease;"></div>'
+        f'</div>'
+    )
+
+
 def _render_breakout_card(r: dict) -> None:
-    cls = "alert-card" if r["direction"] == "bullish" else "alert-card-bear"
-    col = _cc(r["confidence"])
-    cc  = "#00C805" if r["change_pct"] >= 0 else "#F23645"
-    cat_label = "Catalysts" if r["direction"] == "bullish" else "Risks"
+    is_bull = r["direction"] == "bullish"
+    col  = _cc(r["confidence"])
+    cc   = "#00C805" if r["change_pct"] >= 0 else "#F23645"
+    border_color = "rgba(0,200,5,0.22)" if is_bull else "rgba(242,54,69,0.22)"
+    glow_color   = "rgba(0,200,5,0.04)"  if is_bull else "rgba(242,54,69,0.04)"
+    cat_label    = "Catalysts" if is_bull else "Risks"
+
     cats_html = "".join(
-        f'<div style="font-size:0.75rem;color:rgba(255,255,255,0.55);margin-top:2px;">▸ {c}</div>'
+        f'<div style="font-size:0.73rem;color:rgba(255,255,255,0.5);'
+        f'display:flex;align-items:flex-start;gap:5px;margin-top:4px;">'
+        f'<span style="color:{col};margin-top:1px;">▸</span>{c}</div>'
         for c in r["catalysts"][:3]
     )
+
+    trade_html = _trade_plan_html(r)
+
+    # RSI color
+    rsi_color = "#F23645" if r["rsi"] > 70 else "#00C805" if r["rsi"] < 35 else "#fff"
+
     st.markdown(f"""
-    <div class="{cls}">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-        <div>
-          <span style="font-size:1.2rem;font-weight:800;color:#fff;font-family:monospace;">{r['symbol']}</span>
-          <span style="font-size:0.76rem;color:rgba(255,255,255,0.45);margin-left:8px;">{r.get('name','')[:30]}</span>
-          {_dir_badge(r['direction'])}
+    <div style="background:#0C0C10;border:1px solid {border_color};border-radius:16px;
+                padding:20px 22px;margin-bottom:12px;
+                box-shadow:0 0 24px {glow_color};
+                transition:border-color 0.2s,box-shadow 0.2s;">
+
+      <!-- Header row -->
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+
+        <!-- Left: symbol + name + badge -->
+        <div style="min-width:0;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:1.25rem;font-weight:800;color:#fff;
+                         letter-spacing:-0.01em;">{r['symbol']}</span>
+            {_dir_badge(r['direction'])}
+          </div>
+          <div style="font-size:0.72rem;color:rgba(255,255,255,0.38);margin-top:3px;
+                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;">
+            {r.get('name','')[:36]}
+          </div>
         </div>
-        <div style="text-align:right;">
-          <div style="font-size:1.4rem;font-weight:800;color:{col};font-family:monospace;">{r['confidence']:.1f}%</div>
-          <div style="font-size:0.6rem;color:rgba(255,255,255,0.35);letter-spacing:0.1em;">CONFIDENCE</div>
+
+        <!-- Right: confidence -->
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-size:1.7rem;font-weight:800;color:{col};
+                      letter-spacing:-0.02em;line-height:1;">{r['confidence']:.1f}%</div>
+          <div style="font-size:0.58rem;color:rgba(255,255,255,0.3);
+                      letter-spacing:0.1em;text-transform:uppercase;margin-top:2px;">Confidence</div>
+          {_conf_bar(r['confidence'], col)}
         </div>
       </div>
-      <div style="margin-top:10px;display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
-        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">PRICE</span>
-        <span style="color:#fff;font-weight:600;">${r['price']:.2f}</span>
-        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">TODAY</span>
-        <span style="color:{cc};font-weight:600;">{_fp(r['change_pct'])}</span>
-        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">SCORE</span>
-        <span style="color:#fff;font-weight:600;">{r['final_score']:.0f}/100</span>
-        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">RSI</span>
-        <span style="color:#fff;font-weight:500;">{r['rsi']:.1f}</span>
-        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">VOL</span>
-        <span style="color:#fff;font-weight:500;">{r['vol_ratio']:.1f}x</span>
+
+      <!-- Stats grid -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);
+                  gap:0;margin-top:16px;
+                  background:rgba(255,255,255,0.03);border-radius:10px;
+                  border:1px solid rgba(255,255,255,0.05);overflow:hidden;">
+        <div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">
+          {_stat_cell("Price", f"${r['price']:.2f}")}
+        </div>
+        <div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">
+          {_stat_cell("Today", _fp(r['change_pct']), cc)}
+        </div>
+        <div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">
+          {_stat_cell("Score", f"{r['final_score']:.0f}/100", col)}
+        </div>
+        <div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">
+          {_stat_cell("RSI", f"{r['rsi']:.1f}", rsi_color)}
+        </div>
+        <div style="padding:10px 12px;">
+          {_stat_cell("Volume", f"{r['vol_ratio']:.1f}x", "#eab308" if r['vol_ratio'] >= 2 else "#fff")}
+        </div>
       </div>
-      {_trade_plan_html(r)}
-      <div style="margin-top:8px;">{_badges(r['signals'])}</div>
-      {('<div style="margin-top:6px;"><span style="font-size:0.69rem;color:rgba(255,255,255,0.38);">' + cat_label + ':</span>' + cats_html + '</div>') if r['catalysts'] else ''}
+
+      <!-- Trade plan -->
+      {trade_html}
+
+      <!-- Signals -->
+      <div style="margin-top:10px;">{_badges(r['signals'])}</div>
+
+      <!-- Catalysts / Risks -->
+      {f'<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05);"><div style="font-size:0.62rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;margin-bottom:4px;">{cat_label}</div>{cats_html}</div>' if r['catalysts'] else ''}
     </div>
     """, unsafe_allow_html=True)
 
@@ -882,27 +963,63 @@ with t2:
         )
 
         for r in sorted(rows, key=lambda x: x["confidence"], reverse=True)[:12]:
-            cc = "#00C805" if r["change_pct"] >= 0 else "#F23645"
-            cat_preview = (r["catalysts"][0][:60] + "…") if r["catalysts"] else "—"
+            cc  = "#00C805" if r["change_pct"] >= 0 else "#F23645"
+            rsi_c = "#F23645" if r["rsi"] > 70 else "#00C805" if r["rsi"] < 35 else "rgba(255,255,255,0.7)"
+            cat_preview = (r["catalysts"][0][:72] + "…") if r["catalysts"] else ""
             sqz_badge = '<span class="sig-bull">SQZ</span>' if r.get("bb_squeeze") else ""
+            vol_color = "#eab308" if r["vol_ratio"] >= 2 else "rgba(255,255,255,0.7)"
             st.markdown(f"""
-            <div class="expiry-lane" style="background:{bg};border:1px solid rgba(255,255,255,0.06);">
-              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                  <span style="font-weight:800;color:#fff;font-family:monospace;font-size:1rem;">{r['symbol']}</span>
-                  <span style="font-size:0.72rem;color:rgba(255,255,255,0.4);">{r.get('name','')[:24]}</span>
+            <div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);
+                        border-left:3px solid {color};border-radius:12px;
+                        padding:14px 16px;margin-bottom:8px;
+                        transition:background 0.15s,border-color 0.15s;">
+              <!-- Top row: symbol + stats + confidence -->
+              <div style="display:flex;justify-content:space-between;align-items:center;
+                          flex-wrap:wrap;gap:10px;">
+                <!-- Symbol block -->
+                <div style="display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;">
+                  <span style="font-size:1.05rem;font-weight:800;color:#fff;
+                               letter-spacing:-0.01em;">{r['symbol']}</span>
+                  <span style="font-size:0.68rem;color:rgba(255,255,255,0.35);
+                               white-space:nowrap;overflow:hidden;max-width:130px;
+                               text-overflow:ellipsis;">{r.get('name','')[:22]}</span>
                   {_dir_badge(r['direction'])}
                   {sqz_badge}
                 </div>
-                <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
-                  <span style="color:#fff;font-weight:600;">${r['price']:.2f}</span>
-                  <span style="color:{cc};font-weight:600;">{_fp(r['change_pct'])}</span>
-                  <span style="color:rgba(255,255,255,0.4);font-size:0.72rem;">VOL {r['vol_ratio']:.1f}x</span>
-                  <span style="color:{color};font-weight:800;font-size:1rem;">{r['confidence']:.1f}%</span>
+                <!-- Confidence badge -->
+                <div style="text-align:right;flex-shrink:0;">
+                  <span style="font-size:1.35rem;font-weight:800;color:{color};
+                               letter-spacing:-0.02em;">{r['confidence']:.1f}%</span>
                 </div>
               </div>
-              <div style="font-size:0.75rem;color:rgba(255,255,255,0.45);margin-top:6px;">{cat_preview}</div>
-              <div style="margin-top:6px;">{_badges(r['signals'][:4])}</div>
+
+              <!-- Stats row -->
+              <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+                <div style="display:flex;flex-direction:column;gap:2px;">
+                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">Price</span>
+                  <span style="font-size:0.88rem;font-weight:700;color:#fff;">${r['price']:.2f}</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:2px;">
+                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">Today</span>
+                  <span style="font-size:0.88rem;font-weight:700;color:{cc};">{_fp(r['change_pct'])}</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:2px;">
+                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">Volume</span>
+                  <span style="font-size:0.88rem;font-weight:700;color:{vol_color};">{r['vol_ratio']:.1f}x</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:2px;">
+                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">RSI</span>
+                  <span style="font-size:0.88rem;font-weight:700;color:{rsi_c};">{r['rsi']:.0f}</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:2px;">
+                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">Score</span>
+                  <span style="font-size:0.88rem;font-weight:700;color:rgba(255,255,255,0.7);">{r['final_score']:.0f}/100</span>
+                </div>
+              </div>
+
+              <!-- Catalyst preview + signals -->
+              {f'<div style="font-size:0.72rem;color:rgba(255,255,255,0.42);margin-top:8px;line-height:1.4;"><span style="color:{color};margin-right:4px;">▸</span>{cat_preview}</div>' if cat_preview else ""}
+              <div style="margin-top:8px;">{_badges(r['signals'][:4])}</div>
             </div>
             """, unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
