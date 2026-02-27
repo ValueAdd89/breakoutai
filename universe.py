@@ -37,10 +37,22 @@ _universe_lock = threading.Lock()
 
 # ── Universe fetchers ─────────────────────────────────────────────────────────
 
+def _read_html_with_timeout(url: str, attrs: dict, timeout: int = 10) -> list:
+    """Wraps pd.read_html with an explicit HTTP timeout via httpx."""
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            resp = client.get(url)
+        resp.raise_for_status()
+        from io import StringIO
+        return pd.read_html(StringIO(resp.text), attrs=attrs)
+    except Exception as e:
+        raise RuntimeError(str(e)) from e
+
+
 def _fetch_sp500() -> list[tuple[str, str]]:
     """Returns list of (symbol, name) for S&P 500 from Wikipedia."""
     try:
-        tables = pd.read_html(
+        tables = _read_html_with_timeout(
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
             attrs={"id": "constituents"},
         )
@@ -55,7 +67,7 @@ def _fetch_sp500() -> list[tuple[str, str]]:
 def _fetch_nasdaq100() -> list[tuple[str, str]]:
     """Returns list of (symbol, name) for NASDAQ-100 from Wikipedia."""
     try:
-        tables = pd.read_html(
+        tables = _read_html_with_timeout(
             "https://en.wikipedia.org/wiki/Nasdaq-100",
             attrs={"id": "constituents"},
         )

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,7 +24,6 @@ import scanner
 from ml_model import is_model_trained, train_model
 from alerts import send_test_email
 from data_engine import get_price_data
-from universe import get_full_universe
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -33,93 +33,249 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Robinhood-inspired CSS ─────────────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-/* Robinhood dark theme */
-.stApp { background: #000000; font-family: 'Inter', -apple-system, sans-serif; }
+/* ── Base ── */
+.stApp { background: #050507; font-family: 'Inter', -apple-system, sans-serif; }
 [data-testid="stSidebar"] {
-    background: #0C0C0E;
-    border-right: 1px solid rgba(255,255,255,0.06);
+    background: #0A0A0D;
+    border-right: 1px solid rgba(255,255,255,0.05);
 }
-.block-container { padding: 1.5rem 2rem 2rem; max-width: 1200px; }
+.block-container { padding: 0 2rem 2rem; max-width: 1280px; }
+h1,h2,h3,h4 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; }
 
-/* Robinhood green #00C805, red #F23645 */
+/* ── Page header strip ── */
+.page-header {
+    background: linear-gradient(135deg, #0A0A0D 0%, #0d0d12 100%);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding: 18px 0 16px;
+    margin-bottom: 24px;
+}
+.page-header-title {
+    font-size: 1.6rem; font-weight: 800; color: #fff;
+    letter-spacing: -0.03em; line-height: 1;
+}
+.page-header-sub { font-size: 0.78rem; color: rgba(255,255,255,0.4); margin-top: 4px; }
+
+/* ── KPI cards ── */
 .metric-card {
-    background: #0C0C0E;
+    background: #0C0C10;
     border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 16px;
-    padding: 20px;
+    border-radius: 14px;
+    padding: 18px 16px;
     text-align: center;
-    transition: background 0.2s;
+    transition: background 0.2s, border-color 0.2s;
+    height: 100%;
 }
-.metric-card:hover { background: #141418; }
-.metric-value { font-size: 2rem; font-weight: 700; font-family: -apple-system, BlinkMacSystemFont, sans-serif; letter-spacing: -0.02em; }
-.metric-label { font-size: 0.7rem; color: rgba(255,255,255,0.45); font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; }
+.metric-card:hover { background: #141418; border-color: rgba(255,255,255,0.10); }
+.metric-value {
+    font-size: 1.9rem; font-weight: 800;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    letter-spacing: -0.03em; line-height: 1.1;
+}
+.metric-label {
+    font-size: 0.65rem; color: rgba(255,255,255,0.38); font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px;
+}
+.metric-delta {
+    font-size: 0.7rem; color: rgba(255,255,255,0.4); margin-top: 4px;
+}
 
-/* High-confidence cards — clean Robinhood style */
+/* ── Section header ── */
+.section-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 20px 0 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    margin-bottom: 16px;
+}
+.section-title { font-size: 0.95rem; font-weight: 700; color: #fff; }
+.section-count {
+    font-size: 0.72rem; color: rgba(255,255,255,0.4);
+    background: rgba(255,255,255,0.06); border-radius: 20px;
+    padding: 2px 9px; font-weight: 500;
+}
+
+/* ── Alert / breakout cards ── */
 .alert-card {
-    background: #0C0C0E;
-    border: 1px solid rgba(0,200,5,0.25);
-    border-radius: 16px;
-    padding: 20px 24px;
-    margin-bottom: 12px;
+    background: #0C0C10;
+    border: 1px solid rgba(0,200,5,0.2);
+    border-radius: 14px; padding: 18px 20px; margin-bottom: 10px;
     transition: background 0.2s, border-color 0.2s;
 }
-.alert-card:hover { background: #141418; border-color: rgba(0,200,5,0.35); }
+.alert-card:hover { background: #101014; border-color: rgba(0,200,5,0.35); }
 .alert-card-bear {
-    background: #0C0C0E;
-    border: 1px solid rgba(242,54,69,0.25);
-    border-radius: 16px;
-    padding: 20px 24px;
-    margin-bottom: 12px;
+    background: #0C0C10;
+    border: 1px solid rgba(242,54,69,0.2);
+    border-radius: 14px; padding: 18px 20px; margin-bottom: 10px;
+    transition: background 0.2s, border-color 0.2s;
 }
-.alert-card-bear:hover { background: #141418; border-color: rgba(242,54,69,0.35); }
+.alert-card-bear:hover { background: #101014; border-color: rgba(242,54,69,0.35); }
 
-/* Signal badges — minimal pills */
-.sig-bull { background: rgba(0,200,5,0.12); color: #00C805; border-radius: 8px; padding: 4px 10px; font-size: 0.7rem; font-weight: 600; display: inline-block; margin: 2px; }
-.sig-bear { background: rgba(242,54,69,0.12); color: #F23645; border-radius: 8px; padding: 4px 10px; font-size: 0.7rem; font-weight: 600; display: inline-block; margin: 2px; }
-.sig-neut { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5); border-radius: 8px; padding: 4px 10px; font-size: 0.7rem; display: inline-block; margin: 2px; }
+/* ── Signal badges ── */
+.sig-bull {
+    background: rgba(0,200,5,0.1); color: #00C805;
+    border-radius: 6px; padding: 3px 9px; font-size: 0.68rem; font-weight: 600;
+    display: inline-block; margin: 2px; border: 1px solid rgba(0,200,5,0.2);
+}
+.sig-bear {
+    background: rgba(242,54,69,0.1); color: #F23645;
+    border-radius: 6px; padding: 3px 9px; font-size: 0.68rem; font-weight: 600;
+    display: inline-block; margin: 2px; border: 1px solid rgba(242,54,69,0.2);
+}
+.sig-neut {
+    background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.45);
+    border-radius: 6px; padding: 3px 9px; font-size: 0.68rem;
+    display: inline-block; margin: 2px; border: 1px solid rgba(255,255,255,0.08);
+}
 
-.live-dot { width: 6px; height: 6px; background: #00C805; border-radius: 50%; display: inline-block; margin-right: 8px; animation: pulse 2s infinite; }
-@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+/* ── Live dot ── */
+.live-dot {
+    width: 7px; height: 7px; background: #00C805; border-radius: 50%;
+    display: inline-block; margin-right: 7px;
+    box-shadow: 0 0 6px rgba(0,200,5,0.7);
+    animation: pulse-dot 2s infinite;
+}
+.idle-dot {
+    width: 7px; height: 7px; background: rgba(255,255,255,0.3); border-radius: 50%;
+    display: inline-block; margin-right: 7px;
+}
+@keyframes pulse-dot { 0%,100%{opacity:1;box-shadow:0 0 6px rgba(0,200,5,0.7);}
+                        50%{opacity:0.5;box-shadow:0 0 3px rgba(0,200,5,0.3);} }
 
-.progress-bar-outer { background: rgba(255,255,255,0.08); border-radius: 8px; height: 6px; overflow: hidden; margin: 8px 0; }
-.progress-bar-inner { height: 100%; border-radius: 8px; background: #00C805; transition: width 0.5s ease; }
+/* ── Progress bar ── */
+.progress-bar-outer {
+    background: rgba(255,255,255,0.07); border-radius: 8px;
+    height: 5px; overflow: hidden; margin: 8px 0;
+}
+.progress-bar-inner { height: 100%; border-radius: 8px; background: #00C805; transition: width 0.6s ease; }
+@keyframes shimmer {
+    0%{background-position:-200% center;}
+    100%{background-position:200% center;}
+}
+.progress-shimmer {
+    height: 100%; border-radius: 8px;
+    background: linear-gradient(90deg,#00C805 25%,#22c55e 50%,#00C805 75%);
+    background-size: 200% auto;
+    animation: shimmer 1.8s linear infinite;
+}
 
-/* Robinhood-style stock row */
+/* ── Stock table rows ── */
 .stock-row {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.06);
-    transition: background 0.15s; cursor: pointer;
+    padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,0.05);
+    transition: background 0.15s;
 }
-.stock-row:hover { background: rgba(255,255,255,0.03); }
+.stock-row:hover { background: rgba(255,255,255,0.025); }
 .stock-row:last-child { border-bottom: none; }
-.stock-symbol { font-size: 1.1rem; font-weight: 700; color: #fff; }
-.stock-name { font-size: 0.8rem; color: rgba(255,255,255,0.45); margin-top: 2px; }
-.stock-price { font-size: 1rem; font-weight: 600; color: #fff; text-align: right; }
-.stock-change { font-size: 0.95rem; font-weight: 600; text-align: right; }
-.stock-conf { font-size: 0.85rem; font-weight: 600; }
+.stock-symbol { font-size: 1rem; font-weight: 700; color: #fff; letter-spacing: -0.01em; }
+.stock-name { font-size: 0.75rem; color: rgba(255,255,255,0.38); margin-top: 1px; }
+.stock-price { font-size: 0.95rem; font-weight: 600; color: #fff; text-align: right; }
+.stock-change { font-size: 0.9rem; font-weight: 600; text-align: right; }
+.stock-conf { font-size: 0.82rem; font-weight: 700; }
 
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] { gap: 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
-.stTabs [data-baseweb="tab"] { padding: 12px 20px; font-weight: 500; font-size: 0.9rem; }
-.stTabs [aria-selected="true"] { border-bottom: 2px solid #00C805; color: #00C805; }
+/* ── Expiry lane ── */
+.expiry-lane {
+    border-radius: 12px; padding: 16px 18px; margin-bottom: 8px;
+    transition: opacity 0.2s;
+}
+.expiry-lane:hover { opacity: 0.92; }
 
-/* Buttons */
-.stButton > button { border-radius: 12px; font-weight: 600; }
-.stButton > button[kind="primary"] { background: #00C805; color: #000; border: none; }
-.stButton > button[kind="primary"]:hover { background: #00a804; color: #000; }
+/* ── Heatmap cell ── */
+.heat-cell {
+    border-radius: 10px; padding: 10px 8px; text-align: center;
+    transition: transform 0.15s;
+    cursor: default;
+}
+.heat-cell:hover { transform: scale(1.04); }
+
+/* ── Alert timeline row ── */
+.alert-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 16px; border-radius: 10px; margin-bottom: 6px;
+    background: #0C0C10; border: 1px solid rgba(255,255,255,0.05);
+    transition: background 0.15s;
+}
+.alert-row:hover { background: #101014; }
+
+/* ── Sub-tabs (direction) ── */
+.dir-tab-active {
+    background: rgba(0,200,5,0.12); color: #00C805;
+    border: 1px solid rgba(0,200,5,0.3); border-radius: 20px;
+    padding: 5px 16px; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+}
+.dir-tab-inactive {
+    background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.5);
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 20px;
+    padding: 5px 16px; font-size: 0.8rem; font-weight: 500; cursor: pointer;
+}
+
+/* ── Tabs ── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0; border-bottom: 1px solid rgba(255,255,255,0.07);
+    background: transparent;
+}
+.stTabs [data-baseweb="tab"] {
+    padding: 12px 22px; font-weight: 500; font-size: 0.88rem;
+    color: rgba(255,255,255,0.5); border-radius: 0;
+}
+.stTabs [aria-selected="true"] {
+    border-bottom: 2px solid #00C805 !important;
+    color: #fff !important;
+}
+
+/* ── Buttons ── */
+.stButton > button {
+    border-radius: 10px; font-weight: 600; font-size: 0.88rem;
+    transition: all 0.15s;
+}
+.stButton > button:hover { transform: translateY(-1px); }
+
+/* ── Sidebar stat pill ── */
+.stat-pill {
+    display: flex; align-items: center; justify-content: space-between;
+    background: rgba(255,255,255,0.04); border-radius: 8px;
+    padding: 8px 12px; margin-bottom: 6px;
+    font-size: 0.82rem;
+}
+.stat-pill-label { color: rgba(255,255,255,0.45); }
+.stat-pill-val { color: #fff; font-weight: 600; }
+
+/* ── Trade plan box ── */
+.trade-plan {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px; padding: 10px 14px; margin-top: 10px;
+    font-size: 0.79rem; display: flex; gap: 16px; flex-wrap: wrap;
+    align-items: center;
+}
+
+/* ── Direction badge ── */
+.dir-bull {
+    background: rgba(0,200,5,0.1); color: #00C805;
+    border-radius: 5px; padding: 2px 8px; font-size: 0.67rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+}
+.dir-bear {
+    background: rgba(242,54,69,0.1); color: #F23645;
+    border-radius: 5px; padding: 2px 8px; font-size: 0.67rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+}
+.dir-neut {
+    background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5);
+    border-radius: 5px; padding: 2px 8px; font-size: 0.67rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.05em;
+}
 
 /* Selectbox / inputs */
-.stSelectbox > div, .stTextInput > div > div { border-radius: 12px; }
+.stSelectbox > div > div, .stTextInput > div > div { border-radius: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── One-time init (cached per process) ───────────────────────────────────────
+# ── One-time init ─────────────────────────────────────────────────────────────
 
 @st.cache_resource
 def _init() -> bool:
@@ -142,111 +298,224 @@ _init()
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _cc(c: float) -> str:
-    if c >= 90: return "#00C805"   # Robinhood green
+    if c >= 90: return "#00C805"
     if c >= 75: return "#22c55e"
     if c >= 60: return "#eab308"
     if c >= 45: return "#f97316"
-    return "#F23645"  # Robinhood red
-
-def _de(d: str) -> str:
-    return "🟢" if d == "bullish" else "🔴" if d == "bearish" else "⚪"
+    return "#F23645"
 
 def _fp(p: float) -> str:
     return f"+{p:.2f}%" if p >= 0 else f"{p:.2f}%"
 
-def _bar(score: float, color: str) -> str:
-    return (f'<div style="background:rgba(255,255,255,0.08);border-radius:4px;height:5px;'
-            f'overflow:hidden;margin-top:3px;display:inline-block;width:60px;">'
-            f'<div style="width:{min(100,score)}%;height:100%;background:{color};border-radius:4px;"></div></div>')
-
 def _badges(signals: list[dict]) -> str:
     out = ""
     for s in signals[:5]:
-        cls = "sig-bull" if s["type"]=="bullish" else "sig-bear" if s["type"]=="bearish" else "sig-neut"
+        cls = "sig-bull" if s["type"] == "bullish" else "sig-bear" if s["type"] == "bearish" else "sig-neut"
         out += f'<span class="{cls}">{s["name"]}</span>'
     return out
+
+def _hex_to_rgb(h: str) -> str:
+    h = h.lstrip("#")
+    if len(h) == 6:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"{r},{g},{b}"
+    return "255,255,255"
+
+def _dir_badge(d: str) -> str:
+    if d == "bullish": return '<span class="dir-bull">Bullish</span>'
+    if d == "bearish": return '<span class="dir-bear">Bearish</span>'
+    return '<span class="dir-neut">Neutral</span>'
+
+def _trade_plan_html(r: dict) -> str:
+    if r.get("stop_loss") is None or r.get("take_profit_1") is None:
+        return ""
+    return (
+        f'<div class="trade-plan">'
+        f'<span style="color:rgba(255,255,255,0.4);">Trade plan</span>'
+        f'<span style="color:#F23645;">SL&nbsp;${r["stop_loss"]:.2f}</span>'
+        f'<span style="color:#00C805;">TP1&nbsp;${r["take_profit_1"]:.2f}</span>'
+        f'<span style="color:#00C805;">TP2&nbsp;${r["take_profit_2"]:.2f}</span>'
+        f'<span style="color:rgba(255,255,255,0.4);">S/R&nbsp;${r.get("support",0):.0f}&nbsp;/&nbsp;${r.get("resistance",0):.0f}</span>'
+        f'<span style="color:rgba(255,255,255,0.4);">R:R&nbsp;1:{r.get("risk_reward",2):.1f}</span>'
+        f'<span style="color:rgba(255,255,255,0.4);">{r.get("position_pct",2):.1f}%&nbsp;max</span>'
+        f'</div>'
+    )
+
+def _render_breakout_card(r: dict) -> None:
+    cls = "alert-card" if r["direction"] == "bullish" else "alert-card-bear"
+    col = _cc(r["confidence"])
+    cc  = "#00C805" if r["change_pct"] >= 0 else "#F23645"
+    cat_label = "Catalysts" if r["direction"] == "bullish" else "Risks"
+    cats_html = "".join(
+        f'<div style="font-size:0.75rem;color:rgba(255,255,255,0.55);margin-top:2px;">▸ {c}</div>'
+        for c in r["catalysts"][:3]
+    )
+    st.markdown(f"""
+    <div class="{cls}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+        <div>
+          <span style="font-size:1.2rem;font-weight:800;color:#fff;font-family:monospace;">{r['symbol']}</span>
+          <span style="font-size:0.76rem;color:rgba(255,255,255,0.45);margin-left:8px;">{r.get('name','')[:30]}</span>
+          {_dir_badge(r['direction'])}
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:1.4rem;font-weight:800;color:{col};font-family:monospace;">{r['confidence']:.1f}%</div>
+          <div style="font-size:0.6rem;color:rgba(255,255,255,0.35);letter-spacing:0.1em;">CONFIDENCE</div>
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:18px;flex-wrap:wrap;align-items:center;">
+        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">PRICE</span>
+        <span style="color:#fff;font-weight:600;">${r['price']:.2f}</span>
+        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">TODAY</span>
+        <span style="color:{cc};font-weight:600;">{_fp(r['change_pct'])}</span>
+        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">SCORE</span>
+        <span style="color:#fff;font-weight:600;">{r['final_score']:.0f}/100</span>
+        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">RSI</span>
+        <span style="color:#fff;font-weight:500;">{r['rsi']:.1f}</span>
+        <span style="color:rgba(255,255,255,0.4);font-size:0.7rem;">VOL</span>
+        <span style="color:#fff;font-weight:500;">{r['vol_ratio']:.1f}x</span>
+      </div>
+      {_trade_plan_html(r)}
+      <div style="margin-top:8px;">{_badges(r['signals'])}</div>
+      {('<div style="margin-top:6px;"><span style="font-size:0.69rem;color:rgba(255,255,255,0.38);">' + cat_label + ':</span>' + cats_html + '</div>') if r['catalysts'] else ''}
+    </div>
+    """, unsafe_allow_html=True)
+
+def _kpi(label: str, value: str, color: str = "#fff", sub: str = "") -> str:
+    sub_html = f'<div class="metric-delta">{sub}</div>' if sub else ""
+    return (f'<div class="metric-card">'
+            f'<div class="metric-label">{label}</div>'
+            f'<div class="metric-value" style="color:{color};">{value}</div>'
+            f'{sub_html}</div>')
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("## BreakoutAI")
-    st.markdown("*Full market scanner*")
-    st.markdown("---")
+    st.markdown(
+        '<div style="padding:4px 0 16px;">'
+        '<div style="font-size:1.35rem;font-weight:800;color:#fff;letter-spacing:-0.02em;">BreakoutAI</div>'
+        '<div style="font-size:0.72rem;color:rgba(255,255,255,0.35);margin-top:3px;">Full-market breakout scanner</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-    prog   = scanner.get_scan_progress()
+    prog    = scanner.get_scan_progress()
     running = scanner.is_running()
     last_scan = scanner.get_last_scan_time()
 
-    sc_color = "#00C805" if running else "rgba(255,255,255,0.5)"
-    st.markdown(
-        f'<span class="live-dot"></span> Scanner: <strong style="color:{sc_color};">{"Running" if running else "Idle"}</strong>',
-        unsafe_allow_html=True,
-    )
-    if last_scan:
-        st.caption(f"Last complete: {last_scan.strftime('%b %d %H:%M UTC')}")
-
-    # Show live progress if scanning
+    # Scanner status pill
     if prog["running"]:
-        phase = prog["phase"]
-        total = prog["total"] or 1
+        phase = prog.get("phase", "screening")
+        total = prog["total"] or 0
         done  = prog["done"]
         pct   = int(done / total * 100) if total else 0
-        st.markdown(f"**Phase:** {phase.title()}")
+        dot   = '<span class="live-dot"></span>'
+        label = "Screening…" if (phase == "screening" or total == 0) else f"Analyzing {done:,}/{total:,}"
+        bar_inner = '<div class="progress-shimmer" style="width:100%;"></div>' if total == 0 else \
+                    f'<div class="progress-bar-inner" style="width:{pct}%;"></div>'
         st.markdown(
-            f'<div class="progress-bar-outer">'
-            f'<div class="progress-bar-inner" style="width:{pct}%;"></div></div>'
-            f'<div style="font-size:0.75rem;color:rgba(255,255,255,0.5);">{done}/{total} symbols</div>',
+            f'<div style="background:rgba(0,200,5,0.06);border:1px solid rgba(0,200,5,0.18);'
+            f'border-radius:10px;padding:10px 12px;margin-bottom:12px;">'
+            f'{dot}<span style="color:#00C805;font-size:0.82rem;font-weight:600;">{label}</span>'
+            f'<div class="progress-bar-outer" style="margin-top:8px;">{bar_inner}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        dot = '<span class="idle-dot"></span>'
+        status_color = "rgba(255,255,255,0.5)"
+        st.markdown(
+            f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);'
+            f'border-radius:10px;padding:10px 12px;margin-bottom:12px;">'
+            f'{dot}<span style="color:{status_color};font-size:0.82rem;">Scanner idle</span>'
+            f'{"<div style=\\"font-size:0.7rem;color:rgba(255,255,255,0.3);margin-top:4px;\\">Last: " + last_scan.strftime("%b %d %H:%M UTC") + "</div>" if last_scan else ""}'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
     st.markdown("---")
 
-    # Filters
-    st.markdown("### 🔧 Screener Filters")
-    min_conf = st.slider("Min confidence %", 0, 100, 60, 5, key="min_conf")
-    direction_filter = st.selectbox("Direction", ["All", "Bullish only", "Bearish only"], key="dir_filter")
-    min_vol_ratio = st.slider("Min volume ratio", 0.0, 5.0, 0.0, 0.5, key="min_vol")
-    max_results = st.select_slider("Show top N", [25, 50, 100, 200], value=50, key="top_n")
+    # Quick stats
+    _all = scanner.get_latest_results()
+    _bull = sum(1 for r in _all if r["direction"] == "bullish")
+    _bear = sum(1 for r in _all if r["direction"] == "bearish")
+    _hi   = sum(1 for r in _all if r["confidence"] >= config.ALERT_THRESHOLD)
+
+    st.markdown(
+        f'<div class="stat-pill"><span class="stat-pill-label">Scanned</span>'
+        f'<span class="stat-pill-val">{len(_all):,}</span></div>'
+        f'<div class="stat-pill"><span class="stat-pill-label">Bullish</span>'
+        f'<span class="stat-pill-val" style="color:#00C805;">{_bull:,}</span></div>'
+        f'<div class="stat-pill"><span class="stat-pill-label">Bearish</span>'
+        f'<span class="stat-pill-val" style="color:#F23645;">{_bear:,}</span></div>'
+        f'<div class="stat-pill"><span class="stat-pill-label">High Conf ≥{config.ALERT_THRESHOLD:.0f}%</span>'
+        f'<span class="stat-pill-val" style="color:#eab308;">{_hi:,}</span></div>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
-    st.markdown("### ⚙️ Settings")
-    st.caption(f"Alert threshold: **{config.ALERT_THRESHOLD:.0f}%**")
-    st.caption(f"Scan interval: **{config.SCAN_INTERVAL_MINUTES} min**")
-    st.caption(f"Min price: **${config.MIN_PRICE:.0f}** · Min vol: **{config.MIN_AVG_VOLUME//1000:,}k**")
+    st.markdown('<div style="font-size:0.75rem;font-weight:600;color:rgba(255,255,255,0.4);'
+                'letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">Filters</div>',
+                unsafe_allow_html=True)
+    min_conf        = st.slider("Min confidence %", 0, 100, 60, 5, key="min_conf")
+    direction_filter = st.selectbox("Direction", ["All", "Bullish only", "Bearish only"], key="dir_filter")
+    min_vol_ratio   = st.slider("Min volume ratio", 0.0, 5.0, 0.0, 0.5, key="min_vol")
+    max_results     = st.select_slider("Show top N", [25, 50, 100, 200], value=50, key="top_n")
 
-    if st.button("🔄 Scan Now", use_container_width=True):
-        scanner.force_scan_now()
-        st.toast("Full-market scan triggered!", icon="🔍")
+    st.markdown("---")
+    col_scan, col_ref = st.columns(2)
+    with col_scan:
+        if st.button("⚡ Scan Now", use_container_width=True):
+            scanner.force_scan_now()
+            st.toast("Full-market scan triggered!", icon="🔍")
+    with col_ref:
+        if st.button("↺ Refresh", use_container_width=True):
+            st.rerun()
 
     st.markdown("---")
 
     if config.EMAIL_CONFIGURED:
         st.success("✅ Email alerts active")
-        if st.button("📧 Test Email"):
+        if st.button("📧 Test Email", use_container_width=True):
             ok, msg = send_test_email()
             st.success(msg) if ok else st.error(f"Failed: {msg}")
     else:
         st.warning("⚠️ Email not configured")
-        with st.expander("Setup"):
+        with st.expander("Setup email alerts"):
             st.markdown("""
-Add to **Streamlit Cloud Secrets**:
+Add to **Streamlit Secrets**:
 ```toml
 ALERT_EMAIL_FROM     = "you@gmail.com"
 ALERT_EMAIL_PASSWORD = "xxxx xxxx xxxx xxxx"
 ALERT_EMAIL_TO       = "you@gmail.com"
 ```
-Use a Gmail **App Password**, not your normal password.
+Use a Gmail **App Password**.
 [Generate one here](https://myaccount.google.com/apppasswords)
             """)
 
     st.markdown("---")
-    st.caption(f"ML model: {'✅' if is_model_trained() else '⏳ training…'}")
-    st.caption("BreakoutAI · Educational use only")
+    st.markdown(
+        f'<div style="font-size:0.7rem;color:rgba(255,255,255,0.3);line-height:1.8;">'
+        f'ML model: {"✅ trained" if is_model_trained() else "⏳ training…"}<br>'
+        f'Alert threshold: {config.ALERT_THRESHOLD:.0f}%<br>'
+        f'Scan interval: {config.SCAN_INTERVAL_MINUTES} min<br>'
+        f'Min price: ${config.MIN_PRICE:.0f} · Min vol: {config.MIN_AVG_VOLUME//1000:,}k'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div style="font-size:0.65rem;color:rgba(255,255,255,0.18);margin-top:12px;">Educational use only · Not financial advice</div>',
+                unsafe_allow_html=True)
+
+
+# ── Auto-refresh while scanning ───────────────────────────────────────────────
+_prog = scanner.get_scan_progress()
+if _prog["running"]:
+    time.sleep(5)
+    st.rerun()
 
 
 # ── Apply filters ─────────────────────────────────────────────────────────────
-
 all_results = scanner.get_latest_results()
 filtered = [r for r in all_results if r["confidence"] >= min_conf]
 if direction_filter == "Bullish only":
@@ -258,10 +527,54 @@ if min_vol_ratio > 0:
 filtered = filtered[:max_results]
 
 
+# ── Page header ───────────────────────────────────────────────────────────────
+now_utc = datetime.now(timezone.utc)
+market_open = 13 <= now_utc.hour < 20  # rough NYSE window in UTC
+market_str  = '<span style="color:#00C805;">● Market Open</span>' if market_open else \
+              '<span style="color:rgba(255,255,255,0.35);">○ Market Closed</span>'
+high_conf_all = [r for r in all_results if r["confidence"] >= config.ALERT_THRESHOLD]
+
+st.markdown(
+    f'<div class="page-header">'
+    f'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">'
+    f'<div>'
+    f'  <div class="page-header-title">BreakoutAI</div>'
+    f'  <div class="page-header-sub">{market_str}&nbsp;&nbsp;·&nbsp;&nbsp;'
+    f'  {now_utc.strftime("%b %d, %Y  %H:%M UTC")}</div>'
+    f'</div>'
+    f'<div style="display:flex;gap:20px;flex-wrap:wrap;">'
+    f'  <div style="text-align:center;">'
+    f'    <div style="font-size:1.4rem;font-weight:800;color:#fff;">{len(all_results):,}</div>'
+    f'    <div style="font-size:0.62rem;color:rgba(255,255,255,0.35);letter-spacing:0.07em;text-transform:uppercase;">Scanned</div>'
+    f'  </div>'
+    f'  <div style="text-align:center;">'
+    f'    <div style="font-size:1.4rem;font-weight:800;color:#00C805;">{sum(1 for r in all_results if r["direction"]=="bullish"):,}</div>'
+    f'    <div style="font-size:0.62rem;color:rgba(255,255,255,0.35);letter-spacing:0.07em;text-transform:uppercase;">Bullish</div>'
+    f'  </div>'
+    f'  <div style="text-align:center;">'
+    f'    <div style="font-size:1.4rem;font-weight:800;color:#F23645;">{sum(1 for r in all_results if r["direction"]=="bearish"):,}</div>'
+    f'    <div style="font-size:0.62rem;color:rgba(255,255,255,0.35);letter-spacing:0.07em;text-transform:uppercase;">Bearish</div>'
+    f'  </div>'
+    f'  <div style="text-align:center;">'
+    f'    <div style="font-size:1.4rem;font-weight:800;color:#eab308;">{len(high_conf_all):,}</div>'
+    f'    <div style="font-size:0.62rem;color:rgba(255,255,255,0.35);letter-spacing:0.07em;text-transform:uppercase;">High Conf</div>'
+    f'  </div>'
+    f'</div>'
+    f'</div>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
+
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-t1, t2, t3, t4, t5 = st.tabs([
-    "Scanner", "Expiry Signals", "Alerts", "Chart", "Model",
+t1, t2, t3, t4, t5, t6 = st.tabs([
+    "📊  Scanner",
+    "⏱  Expiry Signals",
+    "🔔  Alerts",
+    "📈  Chart",
+    "🌡  Heatmap",
+    "🤖  Model",
 ])
 
 
@@ -270,186 +583,175 @@ t1, t2, t3, t4, t5 = st.tabs([
 # ═══════════════════════════════════════════════════════════════════════════════
 with t1:
 
-    # KPI row
-    high_conf = [r for r in all_results if r["confidence"] >= config.ALERT_THRESHOLD]
-    bullish   = [r for r in all_results if r["direction"] == "bullish"]
-    bearish   = [r for r in all_results if r["direction"] == "bearish"]
-    top       = all_results[0] if all_results else None
-
-    k1, k2, k3, k4, k5 = st.columns(5)
-    with k1:
-        universe_count = len(get_full_universe()) if all_results else 0
-        universe_display = f"{universe_count:,}" if universe_count else "—"
-        st.markdown(f'<div class="metric-card"><div class="metric-label">Universe</div>'
-                    f'<div class="metric-value" style="color:rgba(255,255,255,0.6);">{universe_display}</div></div>',
-                    unsafe_allow_html=True)
-    with k2:
-        st.markdown(f'<div class="metric-card"><div class="metric-label">Scanned</div>'
-                    f'<div class="metric-value" style="color:#fff;">{len(all_results):,}</div></div>',
-                    unsafe_allow_html=True)
-    with k3:
-        st.markdown(f'<div class="metric-card"><div class="metric-label">Bullish</div>'
-                    f'<div class="metric-value" style="color:#00C805;">{len(bullish):,}</div></div>',
-                    unsafe_allow_html=True)
-    with k4:
-        bull_95 = sum(1 for r in high_conf if r["direction"] == "bullish")
-        bear_95 = sum(1 for r in high_conf if r["direction"] == "bearish")
-        st.markdown(f'<div class="metric-card"><div class="metric-label">≥{config.ALERT_THRESHOLD:.0f}%</div>'
-                    f'<div class="metric-value" style="color:#00C805;">{len(high_conf):,}</div>'
-                    f'<div style="font-size:0.68rem;color:rgba(255,255,255,0.45);">{bull_95} bull · {bear_95} bear</div></div>',
-                    unsafe_allow_html=True)
-    with k5:
-        tc  = f"{top['confidence']:.1f}%" if top else "—"
-        tsym = top["symbol"] if top else "—"
-        st.markdown(f'<div class="metric-card"><div class="metric-label">Top Pick</div>'
-                    f'<div class="metric-value" style="color:#00C805;">{tc}</div>'
-                    f'<div style="font-size:0.75rem;color:rgba(255,255,255,0.5);">{tsym}</div></div>',
-                    unsafe_allow_html=True)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Live scan progress — Robinhood-style minimal banner
+    # Scan progress banner
     if prog["running"]:
-        total = prog["total"] or 1
+        total = prog["total"] or 0
         done  = prog["done"]
+        phase = prog.get("phase", "screening")
         pct   = int(done / total * 100) if total else 0
+        if phase == "screening" or total == 0:
+            phase_label = "Building universe & pre-screening tickers…"
+            bar_inner = '<div class="progress-shimmer" style="width:100%;"></div>'
+        else:
+            phase_label = f"Analyzing {done:,} / {total:,} symbols"
+            bar_inner = f'<div class="progress-bar-inner" style="width:{pct}%;"></div>'
         st.markdown(
-            f'<div style="background:#0C0C0E;border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:16px 20px;">'
-            f'<div style="color:rgba(255,255,255,0.8);font-size:0.9rem;font-weight:500;margin-bottom:8px;">'
-            f'Scanning… {done:,} / {total:,} symbols</div>'
-            f'<div class="progress-bar-outer"><div class="progress-bar-inner" style="width:{pct}%;"></div></div>'
+            f'<div style="background:rgba(0,200,5,0.05);border:1px solid rgba(0,200,5,0.15);'
+            f'border-radius:12px;padding:14px 18px;margin-bottom:20px;">'
+            f'<span class="live-dot"></span>'
+            f'<span style="color:rgba(255,255,255,0.8);font-size:0.88rem;font-weight:500;">{phase_label}</span>'
+            f'<div class="progress-bar-outer">{bar_inner}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
-        st.markdown("<br>", unsafe_allow_html=True)
+    elif not all_results:
+        st.markdown(
+            '<div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);border-radius:14px;'
+            'padding:40px 20px;text-align:center;margin-bottom:20px;">'
+            '<div style="font-size:2rem;margin-bottom:12px;">📡</div>'
+            '<div style="color:rgba(255,255,255,0.6);font-size:0.95rem;font-weight:500;">No results yet.</div>'
+            '<div style="color:rgba(255,255,255,0.35);font-size:0.82rem;margin-top:6px;">'
+            'Press <strong style="color:#fff;">⚡ Scan Now</strong> in the sidebar to start the full-market scan.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-    # High-confidence alert cards — Bullish & Bearish at 95%+
-    if high_conf:
-        st.markdown(f"### High-Confidence Alerts (Bullish & Bearish) ≥ {config.ALERT_THRESHOLD:.0f}%")
-        for r in sorted(high_conf, key=lambda x: x["confidence"], reverse=True)[:10]:
-            cls  = "alert-card" if r["direction"] == "bullish" else "alert-card-bear"
-            col  = _cc(r["confidence"])
-            cc   = "#00C805" if r["change_pct"] >= 0 else "#F23645"
-            cats = "".join(
-                f'<div style="font-size:0.76rem;color:rgba(255,255,255,0.6);margin-top:3px;">▸ {c}</div>'
-                for c in r["catalysts"][:3]
-            )
-            cat_label = "Catalysts" if r["direction"] == "bullish" else "Risks"
-            profit_row = ""
-            if r.get("stop_loss") is not None and r.get("take_profit_1") is not None:
-                profit_row = f"""
-              <div style="margin-top:10px;padding:10px 14px;background:rgba(255,255,255,0.03);border-radius:10px;font-size:0.8rem;">
-                <span style="color:rgba(255,255,255,0.5);">Trade plan:</span>
-                <span style="color:#F23645;margin-left:8px;">SL ${r['stop_loss']:.2f}</span>
-                <span style="color:#00C805;margin-left:12px;">TP1 ${r['take_profit_1']:.2f}</span>
-                <span style="color:#00C805;margin-left:6px;">TP2 ${r['take_profit_2']:.2f}</span>
-                <span style="color:rgba(255,255,255,0.5);margin-left:12px;">S/R ${r.get('support',0):.2f} / ${r.get('resistance',0):.2f}</span>
-                <span style="color:rgba(255,255,255,0.5);margin-left:12px;">R:R 1:{r.get('risk_reward',2):.1f}</span>
-                <span style="color:rgba(255,255,255,0.5);margin-left:8px;">· {r.get('position_pct',2):.1f}% max</span>
-              </div>"""
+    # High-confidence cards
+    if high_conf_all:
+        st.markdown(
+            f'<div class="section-header">'
+            f'<span class="section-title">High-Confidence Alerts</span>'
+            f'<span class="section-count">≥ {config.ALERT_THRESHOLD:.0f}% · {len(high_conf_all)} found</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        hc_bull = [r for r in high_conf_all if r["direction"] == "bullish"]
+        hc_bear = [r for r in high_conf_all if r["direction"] == "bearish"]
+
+        hc_col1, hc_col2 = st.columns(2)
+        with hc_col1:
+            if hc_bull:
+                st.markdown(
+                    f'<div style="font-size:0.78rem;font-weight:600;color:#00C805;'
+                    f'letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">'
+                    f'▲ Bullish ({len(hc_bull)})</div>',
+                    unsafe_allow_html=True,
+                )
+                for r in sorted(hc_bull, key=lambda x: x["confidence"], reverse=True)[:5]:
+                    _render_breakout_card(r)
+        with hc_col2:
+            if hc_bear:
+                st.markdown(
+                    f'<div style="font-size:0.78rem;font-weight:600;color:#F23645;'
+                    f'letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">'
+                    f'▼ Bearish ({len(hc_bear)})</div>',
+                    unsafe_allow_html=True,
+                )
+                for r in sorted(hc_bear, key=lambda x: x["confidence"], reverse=True)[:5]:
+                    _render_breakout_card(r)
+
+    # Full results — sub-tabs by direction
+    if all_results:
+        bull_filtered = [r for r in filtered if r["direction"] == "bullish"]
+        bear_filtered = [r for r in filtered if r["direction"] == "bearish"]
+        neut_filtered = [r for r in filtered if r["direction"] == "neutral"]
+
+        st.markdown(
+            f'<div class="section-header">'
+            f'<span class="section-title">All Results</span>'
+            f'<span class="section-count">{len(filtered):,} shown · {len(all_results):,} scanned</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        sub1, sub2, sub3 = st.tabs([
+            f"🟢 Bullish ({len(bull_filtered)})",
+            f"🔴 Bearish ({len(bear_filtered)})",
+            f"⚪ Neutral ({len(neut_filtered)})",
+        ])
+
+        def _stock_table(rows: list) -> None:
+            if not rows:
+                st.markdown(
+                    '<div style="color:rgba(255,255,255,0.3);font-size:0.85rem;'
+                    'text-align:center;padding:24px 0;">No results match current filters.</div>',
+                    unsafe_allow_html=True,
+                )
+                return
+            rows_html = ""
+            for r in rows:
+                col  = _cc(r["confidence"])
+                cc   = "#00C805" if r["change_pct"] >= 0 else "#F23645"
+                sqz  = ' <span class="sig-bull">SQZ</span>' if r.get("bb_squeeze") else ""
+                badge = _badges(r["signals"][:3])
+                rows_html += f"""
+                <tr class="stock-row">
+                  <td style="padding:14px 18px;white-space:nowrap;border-bottom:1px solid rgba(255,255,255,0.05);">
+                    <div class="stock-symbol">{r['symbol']}</div>
+                    <div class="stock-name">{r.get('name','')[:28]}</div>
+                  </td>
+                  <td style="padding:14px 10px;text-align:right;border-bottom:1px solid rgba(255,255,255,0.05);">
+                    <div class="stock-price">${r['price']:.2f}</div>
+                  </td>
+                  <td style="padding:14px 10px;text-align:right;border-bottom:1px solid rgba(255,255,255,0.05);">
+                    <div class="stock-change" style="color:{cc};">{_fp(r['change_pct'])}</div>
+                  </td>
+                  <td style="padding:14px 10px;border-bottom:1px solid rgba(255,255,255,0.05);min-width:90px;">
+                    <div class="stock-conf" style="color:{col};">{r['confidence']:.1f}%</div>
+                    <div style="background:rgba(255,255,255,0.07);border-radius:3px;height:3px;margin-top:5px;width:70px;">
+                      <div style="width:{min(100,r['confidence'])}%;height:100%;background:{col};border-radius:3px;"></div>
+                    </div>
+                  </td>
+                  <td style="padding:14px 10px;text-align:center;color:rgba(255,255,255,0.5);
+                             font-size:0.82rem;border-bottom:1px solid rgba(255,255,255,0.05);">{r['rsi']:.0f}</td>
+                  <td style="padding:14px 10px;text-align:center;color:rgba(255,255,255,0.5);
+                             font-size:0.82rem;border-bottom:1px solid rgba(255,255,255,0.05);">{r['vol_ratio']:.1f}x</td>
+                  <td style="padding:14px 18px;font-size:0.78rem;border-bottom:1px solid rgba(255,255,255,0.05);">{badge}{sqz}</td>
+                </tr>"""
+
             st.markdown(f"""
-            <div class="{cls}">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-                <div>
-                  <span style="font-size:1.25rem;font-weight:800;color:white;font-family:monospace;">{r['symbol']}</span>
-                  <span style="font-size:0.78rem;color:rgba(255,255,255,0.5);margin-left:8px;">{r.get('name','')[:30]}</span>
-                  <span style="font-size:0.7rem;font-weight:600;color:{col};margin-left:8px;text-transform:uppercase;">{r['direction']}</span>
-                </div>
-                <div style="text-align:right;">
-                  <div style="font-size:1.5rem;font-weight:800;color:{col};font-family:monospace;">{r['confidence']:.1f}%</div>
-                  <div style="font-size:0.65rem;color:rgba(255,255,255,0.45);letter-spacing:0.08em;">CONFIDENCE</div>
-                </div>
-              </div>
-              <div style="margin-top:8px;display:flex;gap:16px;flex-wrap:wrap;">
-                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">PRICE</span> <span style="color:#fff;font-weight:600;">${r['price']:.2f}</span>
-                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">TODAY</span> <span style="color:{cc};font-weight:600;">{_fp(r['change_pct'])}</span>
-                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">SCORE</span> <span style="color:#fff;font-weight:600;">{r['final_score']:.0f}/100</span>
-                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">RSI</span>   <span style="color:#fff;font-weight:500;">{r['rsi']:.1f}</span>
-                <span style="color:rgba(255,255,255,0.45);font-size:0.72rem;">VOL</span>   <span style="color:#fff;font-weight:500;">{r['vol_ratio']:.1f}x</span>
-              </div>
-              {profit_row}
-              <div style="margin-top:6px;">{_badges(r['signals'])}</div>
-              {('<div style="margin-top:6px;"><span style="font-size:0.7rem;color:rgba(255,255,255,0.45);">' + cat_label + ':</span>' + cats + '</div>') if r['catalysts'] else ''}
+            <div style="overflow-x:auto;max-height:560px;overflow-y:auto;
+                        background:#0A0A0D;border:1px solid rgba(255,255,255,0.06);border-radius:14px;">
+            <table style="width:100%;border-collapse:collapse;font-size:0.88rem;">
+              <thead>
+                <tr style="position:sticky;top:0;background:#0A0A0D;z-index:1;
+                           border-bottom:1px solid rgba(255,255,255,0.07);">
+                  <th style="padding:11px 18px;text-align:left;color:rgba(255,255,255,0.38);
+                             font-weight:600;font-size:0.68rem;letter-spacing:0.07em;text-transform:uppercase;">Symbol</th>
+                  <th style="padding:11px 10px;text-align:right;color:rgba(255,255,255,0.38);
+                             font-weight:600;font-size:0.68rem;letter-spacing:0.07em;text-transform:uppercase;">Price</th>
+                  <th style="padding:11px 10px;text-align:right;color:rgba(255,255,255,0.38);
+                             font-weight:600;font-size:0.68rem;letter-spacing:0.07em;text-transform:uppercase;">Chg%</th>
+                  <th style="padding:11px 10px;color:rgba(255,255,255,0.38);
+                             font-weight:600;font-size:0.68rem;letter-spacing:0.07em;text-transform:uppercase;">Confidence</th>
+                  <th style="padding:11px 10px;text-align:center;color:rgba(255,255,255,0.38);
+                             font-weight:600;font-size:0.68rem;letter-spacing:0.07em;text-transform:uppercase;">RSI</th>
+                  <th style="padding:11px 10px;text-align:center;color:rgba(255,255,255,0.38);
+                             font-weight:600;font-size:0.68rem;letter-spacing:0.07em;text-transform:uppercase;">Vol</th>
+                  <th style="padding:11px 18px;color:rgba(255,255,255,0.38);
+                             font-weight:600;font-size:0.68rem;letter-spacing:0.07em;text-transform:uppercase;">Signals</th>
+                </tr>
+              </thead>
+              <tbody style="background:#050507;">{rows_html}</tbody>
+            </table>
             </div>
             """, unsafe_allow_html=True)
-        st.markdown("---")
 
-    # Full results table
-    if not all_results:
-        prog = scanner.get_scan_progress()
-        is_running = prog.get("running", False)
-        msg = (
-            "🔄 Full-market scan in progress…\n\n"
-            "**Stage 1** — Pre-screening ~3,000 tickers for liquidity (~2 min)\n\n"
-            "**Stage 2** — Running ML + indicators on ~400-800 candidates in parallel (~5 min)\n\n"
-        )
-        if is_running:
-            msg += "**This page auto-refreshes every 15 seconds** while scanning. "
-        msg += "Click **Refresh** below to check for results."
-        st.info(msg)
-        if is_running:
-            done, total = prog.get("done", 0), prog.get("total", 0) or 1
-            st.progress(done / total, text=f"{prog.get('phase', 'analyzing').title()}… {done:,} / {total:,} symbols")
-            time.sleep(15)
-            st.rerun()
-        else:
-            st.warning("Scan idle. Click **Scan Now** in the sidebar to start, or **Refresh** to reload.")
-    else:
-        st.markdown(f"### 📊 Top Results  ·  *{len(filtered):,} shown, {len(all_results):,} scanned*")
+        with sub1:
+            _stock_table(bull_filtered)
+        with sub2:
+            _stock_table(bear_filtered)
+        with sub3:
+            _stock_table(neut_filtered)
 
-        # Robinhood-style stock list
-        rows_html = ""
-        for r in filtered:
-            col   = _cc(r["confidence"])
-            cc    = "#00C805" if r["change_pct"] >= 0 else "#F23645"
-            sqz   = ' <span class="sig-bull">SQZ</span>' if r.get("bb_squeeze") else ""
-            badge = _badges(r["signals"][:3])
-            rows_html += f"""
-            <tr class="stock-row">
-              <td style="padding:16px 20px;white-space:nowrap;border-bottom:1px solid rgba(255,255,255,0.06);">
-                <div class="stock-symbol">{_de(r['direction'])} {r['symbol']}</div>
-                <div class="stock-name">{r.get('name','')[:28]}</div>
-              </td>
-              <td style="padding:16px 12px;text-align:right;border-bottom:1px solid rgba(255,255,255,0.06);">
-                <div class="stock-price">${r['price']:.2f}</div>
-              </td>
-              <td style="padding:16px 12px;text-align:right;border-bottom:1px solid rgba(255,255,255,0.06);">
-                <div class="stock-change" style="color:{cc};">{_fp(r['change_pct'])}</div>
-              </td>
-              <td style="padding:16px 12px;border-bottom:1px solid rgba(255,255,255,0.06);">
-                <div class="stock-conf" style="color:{col};">{r['confidence']:.1f}%</div>
-                <div style="background:rgba(255,255,255,0.08);border-radius:4px;height:4px;margin-top:4px;width:60px;">
-                  <div style="width:{min(100,r['confidence'])}%;height:100%;background:{col};border-radius:4px;"></div>
-                </div>
-              </td>
-              <td style="padding:16px 12px;text-align:right;color:rgba(255,255,255,0.5);font-size:0.85rem;border-bottom:1px solid rgba(255,255,255,0.06);">{r['rsi']:.0f}</td>
-              <td style="padding:16px 20px;font-size:0.8rem;border-bottom:1px solid rgba(255,255,255,0.06);">{badge}{sqz}</td>
-            </tr>"""
-
-        st.markdown(f"""
-        <div style="overflow-x:auto;max-height:620px;overflow-y:auto;background:#0C0C0E;border:1px solid rgba(255,255,255,0.06);border-radius:16px;">
-        <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
-          <thead>
-            <tr style="position:sticky;top:0;background:#0C0C0E;z-index:1;border-bottom:1px solid rgba(255,255,255,0.08);">
-              <th style="padding:12px 20px;text-align:left;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Symbol</th>
-              <th style="padding:12px;text-align:right;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Price</th>
-              <th style="padding:12px;text-align:right;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Chg%</th>
-              <th style="padding:12px;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Confidence</th>
-              <th style="padding:12px;text-align:right;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">RSI</th>
-              <th style="padding:12px 20px;color:rgba(255,255,255,0.5);font-weight:500;font-size:0.75rem;">Signals</th>
-            </tr>
-          </thead>
-          <tbody style="background:#000;">{rows_html}</tbody>
-        </table>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("---")
+    # Auto-refresh row
+    st.markdown("<br>", unsafe_allow_html=True)
     c_ar, c_ref = st.columns([3, 1])
     with c_ar:
         auto = st.checkbox("Auto-refresh every 60 s", value=False, key="auto_refresh")
     with c_ref:
-        if st.button("🔄 Refresh", help="Click to refresh and see latest results"):
+        if st.button("↺ Refresh", key="tab1_refresh"):
             st.rerun()
     if auto:
         time.sleep(60)
@@ -457,70 +759,111 @@ with t1:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — EXPIRY SIGNALS (0DTE, 2DTE, Weeklies, Monthlies, Yearly)
+# TAB 2 — EXPIRY SIGNALS
 # ═══════════════════════════════════════════════════════════════════════════════
 EXPIRY_ORDER = ["0dte", "2dte", "weeklies", "monthlies", "yearly"]
-EXPIRY_LABELS = {
-    "0dte": ("0 DTE", "Same-day · explosive setup", "rgba(242,54,69,0.2)", "#F23645"),
-    "2dte": ("2 DTE", "1–2 days · imminent move", "rgba(255,159,10,0.2)", "#ff9f0a"),
-    "weeklies": ("Weeklies", "5–7 days · breakout play", "rgba(0,200,5,0.15)", "#00C805"),
-    "monthlies": ("Monthlies", "~30 days · swing setup", "rgba(10,132,255,0.15)", "#0a84ff"),
-    "yearly": ("Yearly", "~365 days · LEAPS trend", "rgba(148,163,184,0.15)", "#94a3b8"),
+EXPIRY_META = {
+    "0dte":     ("0 DTE",     "Same-day · explosive setup",        "rgba(242,54,69,0.08)",   "#F23645"),
+    "2dte":     ("2 DTE",     "1–2 days · imminent move",          "rgba(255,159,10,0.08)",   "#ff9f0a"),
+    "weeklies": ("Weeklies",  "5–7 days · breakout play",          "rgba(0,200,5,0.08)",      "#00C805"),
+    "monthlies":("Monthlies", "~30 days · swing setup",            "rgba(10,132,255,0.08)",   "#0a84ff"),
+    "yearly":   ("Yearly",    "~365 days · LEAPS trend play",      "rgba(148,163,184,0.08)",  "#94a3b8"),
 }
 
 with t2:
-    st.markdown("### Expiry Signals by Breakout Type")
-    st.caption("Stocks on the verge of a breakout, grouped by recommended options expiry. Based on technicals + real-world events.")
+    st.markdown(
+        '<div style="padding:8px 0 20px;">'
+        '<div style="font-size:0.88rem;color:rgba(255,255,255,0.45);max-width:600px;">'
+        'Stocks on the verge of a breakout, grouped by recommended options expiry. '
+        'Assigned based on BB squeeze strength, volume surge, catalysts, and ML confidence.'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
 
-    expiry_groups = {e: [] for e in EXPIRY_ORDER}
-    breakout_min = 60  # Min confidence to show in expiry signals
+    expiry_groups: dict[str, list] = {e: [] for e in EXPIRY_ORDER}
     for r in all_results:
-        if r["confidence"] < breakout_min:
+        if r["confidence"] < 60:
             continue
         exp = r.get("expiry_signal", "weeklies")
         if exp in expiry_groups:
             expiry_groups[exp].append(r)
 
+    # Summary bar
+    summary_html = ""
+    for key in EXPIRY_ORDER:
+        label, _, _, color = EXPIRY_META[key]
+        cnt = len(expiry_groups[key])
+        summary_html += (
+            f'<div style="text-align:center;padding:12px 16px;background:rgba(255,255,255,0.03);'
+            f'border:1px solid rgba(255,255,255,0.06);border-radius:10px;">'
+            f'<div style="font-size:1.3rem;font-weight:800;color:{color};">{cnt}</div>'
+            f'<div style="font-size:0.65rem;color:rgba(255,255,255,0.38);margin-top:2px;'
+            f'letter-spacing:0.07em;text-transform:uppercase;">{label}</div>'
+            f'</div>'
+        )
+    st.markdown(
+        f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:24px;">'
+        f'{summary_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+    any_results = False
     for exp_key in EXPIRY_ORDER:
         rows = expiry_groups[exp_key]
         if not rows:
             continue
-        label, desc, bg, color = EXPIRY_LABELS.get(exp_key, (exp_key, "", "rgba(255,255,255,0.05)", "#fff"))
-        st.markdown(f"#### {label}")
-        st.caption(desc)
-        for r in sorted(rows, key=lambda x: x["confidence"], reverse=True)[:15]:
+        any_results = True
+        label, desc, bg, color = EXPIRY_META[exp_key]
+
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">'
+            f'<div style="font-size:1rem;font-weight:700;color:{color};">{label}</div>'
+            f'<div style="font-size:0.72rem;color:rgba(255,255,255,0.38);">{desc}</div>'
+            f'<div style="font-size:0.68rem;color:rgba(255,255,255,0.3);'
+            f'background:rgba(255,255,255,0.05);border-radius:20px;padding:2px 9px;">'
+            f'{len(rows)} stocks</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        for r in sorted(rows, key=lambda x: x["confidence"], reverse=True)[:12]:
             cc = "#00C805" if r["change_pct"] >= 0 else "#F23645"
-            cat_preview = (r["catalysts"][0][:50] + "…") if r["catalysts"] else "—"
+            cat_preview = (r["catalysts"][0][:60] + "…") if r["catalysts"] else "—"
+            sqz_badge = '<span class="sig-bull">SQZ</span>' if r.get("bb_squeeze") else ""
             st.markdown(f"""
-            <div style="background:{bg};border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:14px 18px;margin-bottom:8px;">
+            <div class="expiry-lane" style="background:{bg};border:1px solid rgba(255,255,255,0.06);">
               <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-                <div>
-                  <span style="font-weight:700;color:#fff;font-family:monospace;">{r['symbol']}</span>
-                  <span style="font-size:0.75rem;color:rgba(255,255,255,0.5);margin-left:8px;">{r.get('name','')[:25]}</span>
-                  <span style="font-size:0.7rem;font-weight:600;color:{color};margin-left:6px;">{r['direction'].upper()}</span>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                  <span style="font-weight:800;color:#fff;font-family:monospace;font-size:1rem;">{r['symbol']}</span>
+                  <span style="font-size:0.72rem;color:rgba(255,255,255,0.4);">{r.get('name','')[:24]}</span>
+                  {_dir_badge(r['direction'])}
+                  {sqz_badge}
                 </div>
-                <div style="display:flex;gap:16px;align-items:center;">
+                <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
                   <span style="color:#fff;font-weight:600;">${r['price']:.2f}</span>
                   <span style="color:{cc};font-weight:600;">{_fp(r['change_pct'])}</span>
-                  <span style="color:{color};font-weight:700;">{r['confidence']:.1f}%</span>
+                  <span style="color:rgba(255,255,255,0.4);font-size:0.72rem;">VOL {r['vol_ratio']:.1f}x</span>
+                  <span style="color:{color};font-weight:800;font-size:1rem;">{r['confidence']:.1f}%</span>
                 </div>
               </div>
-              <div style="font-size:0.78rem;color:rgba(255,255,255,0.55);margin-top:6px;">{cat_preview}</div>
-              <div style="margin-top:6px;">{_badges(r['signals'][:3])}</div>
+              <div style="font-size:0.75rem;color:rgba(255,255,255,0.45);margin-top:6px;">{cat_preview}</div>
+              <div style="margin-top:6px;">{_badges(r['signals'][:4])}</div>
             </div>
             """, unsafe_allow_html=True)
-        st.markdown("")
+        st.markdown("<br>", unsafe_allow_html=True)
 
-    if not any(expiry_groups.values()):
-        st.info("Run a scan to see expiry signals. Stocks are assigned to 0DTE, 2DTE, Weeklies, Monthlies, or Yearly based on technical setup + catalysts.")
+    if not any_results:
+        st.info("Run a scan to populate expiry signals. Stocks are assigned to 0DTE → Yearly based on technical setup + catalysts.")
 
-    with st.expander("How expiry signals are assigned"):
+    with st.expander("How expiry signals work"):
         st.markdown("""
-        - **0 DTE**: BB squeeze + volume surge (≥2.5x) + catalyst or 90%+ confidence — explosive same-day move
-        - **2 DTE**: Squeeze or vol spike (≥2x) + catalyst/momentum + 80%+ confidence — 1–2 day breakout
-        - **Weeklies**: Volume confirmation (≥1.5x) + 70%+ confidence — standard 5–7 day play
-        - **Monthlies**: 65%+ confidence + trend (price > SMA50) — ~30 day swing
-        - **Yearly**: 60%+ confidence + above SMA200 — LEAPS-style trend play
+        | Bucket | Criteria |
+        |--------|----------|
+        | **0 DTE** | BB squeeze + volume ≥ 2.5x + catalyst or 90%+ confidence |
+        | **2 DTE** | Squeeze or vol ≥ 2x + catalyst/momentum + 80%+ confidence |
+        | **Weeklies** | Volume ≥ 1.5x + 70%+ confidence |
+        | **Monthlies** | 65%+ confidence + price > SMA50 |
+        | **Yearly** | 60%+ confidence + price > SMA200 (LEAPS) |
 
         *Catalysts = news sentiment, multiple technical signals, or event-driven factors.*
         """)
@@ -530,35 +873,60 @@ with t2:
 # TAB 3 — ALERTS
 # ═══════════════════════════════════════════════════════════════════════════════
 with t3:
-    st.markdown("### Alert History")
-    st.caption(f"Bullish & bearish alerts when confidence ≥ {config.ALERT_THRESHOLD:.0f}% · 4h throttle per symbol+direction")
-
     alerts = db.get_alerts(limit=200)
-    if not alerts:
-        st.info("No alerts yet. The scanner runs the full market every 30 minutes and will alert you when a breakout is detected.")
-    else:
-        a1, a2, a3 = st.columns(3)
-        a1.metric("Total Alerts", len(alerts))
-        a2.metric("Emails Sent",  sum(1 for a in alerts if a["email_sent"]))
-        a3.metric("Avg Confidence", f"{sum(a['confidence'] for a in alerts)/len(alerts):.1f}%")
-        st.markdown("---")
 
+    if not alerts:
+        st.markdown(
+            '<div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);border-radius:14px;'
+            'padding:40px 20px;text-align:center;">'
+            '<div style="font-size:2rem;margin-bottom:12px;">🔕</div>'
+            '<div style="color:rgba(255,255,255,0.5);font-size:0.9rem;">No alerts yet.</div>'
+            '<div style="color:rgba(255,255,255,0.3);font-size:0.8rem;margin-top:6px;">'
+            f'Alerts fire when confidence ≥ {config.ALERT_THRESHOLD:.0f}%. '
+            'The scanner runs every 30 minutes.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        # KPI row
+        avg_conf = sum(a["confidence"] for a in alerts) / len(alerts)
+        emails_sent = sum(1 for a in alerts if a["email_sent"])
+        bull_alerts = sum(1 for a in alerts if a["direction"] == "bullish")
+        bear_alerts = sum(1 for a in alerts if a["direction"] == "bearish")
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.markdown(_kpi("Total Alerts", str(len(alerts))), unsafe_allow_html=True)
+        k2.markdown(_kpi("Avg Confidence", f"{avg_conf:.1f}%", _cc(avg_conf)), unsafe_allow_html=True)
+        k3.markdown(_kpi("Bullish", str(bull_alerts), "#00C805"), unsafe_allow_html=True)
+        k4.markdown(_kpi("Bearish", str(bear_alerts), "#F23645", f"{emails_sent} emails sent"), unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Timeline
         for alert in alerts:
-            ts = alert["triggered_at"][:19].replace("T", " ")
-            ei = "📧" if alert["email_sent"] else "🔕"
+            ts  = alert["triggered_at"][:19].replace("T", " ")
+            col = _cc(alert["confidence"])
+            cc  = "#00C805" if alert["change_pct"] >= 0 else "#F23645"
+            ei  = "📧" if alert["email_sent"] else ""
+            dir_badge = _dir_badge(alert["direction"])
             with st.expander(
-                f"{_de(alert['direction'])} **{alert['symbol']}** — {alert['confidence']:.1f}% · {ts} {ei}"
+                f"{'▲' if alert['direction']=='bullish' else '▼'}  {alert['symbol']}  —  "
+                f"{alert['confidence']:.1f}%  ·  {ts}  {ei}"
             ):
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Price",  f"${alert['price']:.2f}")
-                c2.metric("Change", _fp(alert["change_pct"]))
-                c3.metric("Score",  f"{alert['score']:.0f}/100")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Price",      f"${alert['price']:.2f}")
+                m2.metric("Change",     _fp(alert["change_pct"]))
+                m3.metric("Score",      f"{alert['score']:.0f}/100")
+                m4.metric("Confidence", f"{alert['confidence']:.1f}%")
                 if alert["catalysts"]:
                     label = "Catalysts" if alert["direction"] == "bullish" else "Risks"
                     st.markdown(f"**{label}:**")
                     for c in alert["catalysts"]:
                         st.markdown(f"- {c}")
-                st.caption(f"Direction: {alert['direction'].upper()} · Email: {'sent' if alert['email_sent'] else 'not sent'}")
+                st.caption(
+                    f"Direction: {alert['direction'].upper()} · "
+                    f"Email: {'sent ✓' if alert['email_sent'] else 'not sent'} · {ts} UTC"
+                )
 
         st.markdown("---")
         df_exp = pd.DataFrame(alerts)
@@ -575,8 +943,6 @@ with t3:
 # TAB 4 — CHART
 # ═══════════════════════════════════════════════════════════════════════════════
 with t4:
-    st.markdown("### 📈 Price Chart + Indicators")
-
     live = scanner.get_latest_results()
     sym_opts = [r["symbol"] for r in live] if live else []
 
@@ -584,7 +950,7 @@ with t4:
     with sc1:
         chart_sym = st.selectbox("Symbol", sym_opts or ["AAPL"], key="chart_sym")
     with sc2:
-        chart_per = st.selectbox("Period", ["3mo","6mo","1y","2y"], index=1, key="chart_per")
+        chart_per = st.selectbox("Period", ["1mo","3mo","6mo","1y","2y"], index=2, key="chart_per")
     with sc3:
         custom_sym = st.text_input("Or type any ticker", placeholder="e.g. ORCL", key="custom_sym").upper().strip()
 
@@ -595,76 +961,107 @@ with t4:
             try:
                 df = get_price_data(sym, period=chart_per).reset_index()
                 df.columns = [c.lower() for c in df.columns]
-                dc = df.columns[0]
+                dc    = df.columns[0]
                 close = df["close"]
+
                 df["sma20"]   = close.rolling(20).mean()
                 df["sma50"]   = close.rolling(50).mean()
                 df["sma200"]  = close.rolling(200).mean()
                 df["vol_avg"] = df["volume"].rolling(20).mean()
 
-                # Bollinger Bands
                 std20 = close.rolling(20).std()
-                df["bb_up"] = df["sma20"] + 2*std20
-                df["bb_lo"] = df["sma20"] - 2*std20
+                df["bb_up"] = df["sma20"] + 2 * std20
+                df["bb_lo"] = df["sma20"] - 2 * std20
 
-                fig = go.Figure()
+                # RSI
+                delta = close.diff()
+                gain  = delta.clip(lower=0).rolling(14).mean()
+                loss  = (-delta.clip(upper=0)).rolling(14).mean()
+                rs    = gain / loss.replace(0, float("nan"))
+                df["rsi"] = 100 - (100 / (1 + rs))
+
+                # ── Figure: price + volume + RSI ──────────────────────────────
+                fig = make_subplots(
+                    rows=3, cols=1, shared_xaxes=True,
+                    row_heights=[0.60, 0.20, 0.20],
+                    vertical_spacing=0.03,
+                )
+
                 # Candlesticks
                 fig.add_trace(go.Candlestick(
                     x=df[dc], open=df["open"], high=df["high"],
                     low=df["low"], close=close, name=sym,
                     increasing_line_color="#00C805", decreasing_line_color="#F23645",
                     increasing_fillcolor="#00C805", decreasing_fillcolor="#F23645",
-                ))
-                # MAs — Robinhood-style subtle lines
-                fig.add_trace(go.Scatter(x=df[dc], y=df["sma20"],  name="SMA 20",
-                                          line=dict(color="#00C805", width=1.5)))
-                fig.add_trace(go.Scatter(x=df[dc], y=df["sma50"],  name="SMA 50",
-                                          line=dict(color="#eab308", width=1.5, dash="dot")))
-                fig.add_trace(go.Scatter(x=df[dc], y=df["sma200"], name="SMA 200",
-                                          line=dict(color="rgba(255,255,255,0.4)", width=1, dash="dash")))
-                # Bollinger Bands
-                fig.add_trace(go.Scatter(x=df[dc], y=df["bb_up"], name="BB Upper",
-                                          line=dict(color="rgba(255,255,255,0.3)", width=1, dash="dot")))
-                fig.add_trace(go.Scatter(x=df[dc], y=df["bb_lo"], name="BB Lower",
-                                          line=dict(color="rgba(255,255,255,0.3)", width=1, dash="dot"),
-                                          fill="tonexty", fillcolor="rgba(255,255,255,0.03)"))
+                ), row=1, col=1)
 
-                # Annotate if high-confidence
+                for name, col_name, clr, dash in [
+                    ("SMA 20", "sma20", "#00C805", "solid"),
+                    ("SMA 50", "sma50", "#eab308", "dot"),
+                    ("SMA 200","sma200","rgba(255,255,255,0.35)","dash"),
+                ]:
+                    fig.add_trace(go.Scatter(
+                        x=df[dc], y=df[col_name], name=name,
+                        line=dict(color=clr, width=1.5, dash=dash),
+                    ), row=1, col=1)
+
+                fig.add_trace(go.Scatter(
+                    x=df[dc], y=df["bb_up"], name="BB Upper",
+                    line=dict(color="rgba(255,255,255,0.25)", width=1, dash="dot"),
+                ), row=1, col=1)
+                fig.add_trace(go.Scatter(
+                    x=df[dc], y=df["bb_lo"], name="BB Lower",
+                    line=dict(color="rgba(255,255,255,0.25)", width=1, dash="dot"),
+                    fill="tonexty", fillcolor="rgba(255,255,255,0.025)",
+                ), row=1, col=1)
+
                 res = next((r for r in live if r["symbol"] == sym), None)
                 if res and res["confidence"] >= config.ALERT_THRESHOLD:
                     fig.add_annotation(
                         x=df[dc].iloc[-1], y=float(close.iloc[-1]),
                         text=f"⚡ {res['confidence']:.0f}%",
-                        showarrow=True, arrowhead=2,
-                        arrowcolor="#00C805",
-                        font=dict(color="#00C805", size=13),
-                        bgcolor="rgba(0,200,5,0.1)", bordercolor="rgba(0,200,5,0.4)",
+                        showarrow=True, arrowhead=2, arrowcolor="#00C805",
+                        font=dict(color="#00C805", size=12),
+                        bgcolor="rgba(0,200,5,0.1)", bordercolor="rgba(0,200,5,0.35)",
+                        row=1, col=1,
                     )
 
+                # Volume
+                vc = ["#00C805" if c >= o else "#F23645"
+                      for c, o in zip(df["close"], df["open"])]
+                fig.add_trace(go.Bar(
+                    x=df[dc], y=df["volume"], marker_color=vc, opacity=0.6, name="Volume",
+                ), row=2, col=1)
+                fig.add_trace(go.Scatter(
+                    x=df[dc], y=df["vol_avg"], name="Vol 20d avg",
+                    line=dict(color="#eab308", width=1.5),
+                ), row=2, col=1)
+
+                # RSI
+                fig.add_trace(go.Scatter(
+                    x=df[dc], y=df["rsi"], name="RSI 14",
+                    line=dict(color="#0a84ff", width=1.5),
+                ), row=3, col=1)
+                for lvl, clr in [(70, "rgba(242,54,69,0.4)"), (30, "rgba(0,200,5,0.4)")]:
+                    fig.add_hline(y=lvl, line_dash="dot", line_color=clr,
+                                  line_width=1, row=3, col=1)
+
+                axis_style = dict(gridcolor="rgba(255,255,255,0.05)", showline=False, zeroline=False)
                 fig.update_layout(
-                    paper_bgcolor="#000000", plot_bgcolor="#0C0C0E",
-                    font=dict(color="rgba(255,255,255,0.7)"), height=440,
-                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", rangeslider_visible=False),
-                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", tickprefix="$"),
-                    legend=dict(bgcolor="#0C0C0E", bordercolor="rgba(255,255,255,0.08)", orientation="h", y=-0.15),
-                    margin=dict(l=10, r=10, t=30, b=10),
+                    paper_bgcolor="#050507", plot_bgcolor="#0A0A0D",
+                    font=dict(color="rgba(255,255,255,0.6)", family="Inter, sans-serif"),
+                    height=600,
+                    xaxis=dict(**axis_style, rangeslider_visible=False),
+                    xaxis2=dict(**axis_style),
+                    xaxis3=dict(**axis_style),
+                    yaxis=dict(**axis_style, tickprefix="$"),
+                    yaxis2=dict(**axis_style),
+                    yaxis3=dict(**axis_style, range=[0, 100]),
+                    legend=dict(bgcolor="#0A0A0D", bordercolor="rgba(255,255,255,0.07)",
+                                orientation="h", y=-0.06, font=dict(size=11)),
+                    margin=dict(l=8, r=8, t=20, b=8),
                 )
                 st.plotly_chart(fig, use_container_width=True)
-
-                # Volume
-                vc = ["#00C805" if c >= o else "#F23645" for c, o in zip(df["close"], df["open"])]
-                fv = go.Figure()
-                fv.add_trace(go.Bar(x=df[dc], y=df["volume"], marker_color=vc, opacity=0.7, name="Volume"))
-                fv.add_trace(go.Scatter(x=df[dc], y=df["vol_avg"], name="20d avg",
-                                         line=dict(color="#eab308", width=1.5)))
-                fv.update_layout(
-                    paper_bgcolor="#000000", plot_bgcolor="#0C0C0E",
-                    font=dict(color="rgba(255,255,255,0.7)"), height=140,
-                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
-                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
-                    margin=dict(l=10, r=10, t=5, b=10), showlegend=False,
-                )
-                st.plotly_chart(fv, use_container_width=True)
 
                 if res:
                     st.markdown("---")
@@ -674,14 +1071,16 @@ with t4:
                     m3.metric("RSI",            f"{res['rsi']:.1f}")
                     m4.metric("Volume Ratio",   f"{res['vol_ratio']:.2f}x")
                     m5.metric("Direction",      res["direction"].upper())
-                    if res.get("stop_loss") is not None and res.get("take_profit_1") is not None:
+                    if res.get("stop_loss") is not None:
                         st.markdown("**Trade plan (ATR-based):**")
                         p1, p2, p3, p4, p5 = st.columns(5)
                         p1.metric("Stop-loss", f"${res['stop_loss']:.2f}")
-                        p2.metric("TP1", f"${res['take_profit_1']:.2f}")
-                        p3.metric("TP2", f"${res['take_profit_2']:.2f}")
-                        p4.metric("Support / Resistance", f"${res.get('support',0):.0f} / ${res.get('resistance',0):.0f}")
-                        p5.metric("R:R · Position", f"1:{res.get('risk_reward',2):.1f} · {res.get('position_pct',2):.1f}%")
+                        p2.metric("TP1",       f"${res['take_profit_1']:.2f}")
+                        p3.metric("TP2",       f"${res['take_profit_2']:.2f}")
+                        p4.metric("Support / Resistance",
+                                  f"${res.get('support',0):.0f} / ${res.get('resistance',0):.0f}")
+                        p5.metric("R:R · Position",
+                                  f"1:{res.get('risk_reward',2):.1f} · {res.get('position_pct',2):.1f}%")
                     if res["catalysts"]:
                         st.markdown("**Catalysts / Risks:**")
                         for c in res["catalysts"]:
@@ -692,12 +1091,118 @@ with t4:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — MODEL
+# TAB 5 — HEATMAP
 # ═══════════════════════════════════════════════════════════════════════════════
+SECTOR_MAP: dict[str, str] = {
+    "AAPL":"Technology","MSFT":"Technology","GOOGL":"Technology","META":"Technology",
+    "NVDA":"Technology","AMD":"Technology","INTC":"Technology","QCOM":"Technology",
+    "AMZN":"Consumer","TSLA":"Consumer","NFLX":"Consumer","SHOP":"Consumer",
+    "JPM":"Financials","BAC":"Financials","GS":"Financials","MS":"Financials","V":"Financials",
+    "XOM":"Energy","CVX":"Energy","COP":"Energy","SLB":"Energy",
+    "JNJ":"Healthcare","PFE":"Healthcare","ABBV":"Healthcare","MRK":"Healthcare",
+    "LLY":"Healthcare","UNH":"Healthcare",
+    "SPY":"ETFs","QQQ":"ETFs","IWM":"ETFs","DIA":"ETFs",
+    "COIN":"Crypto","MSTR":"Crypto","RIOT":"Crypto","MARA":"Crypto",
+    "PLTR":"Technology","SOFI":"Financials","HOOD":"Financials",
+    "TSLA":"Consumer","RIVN":"Consumer","LCID":"Consumer","NIO":"Consumer",
+    "SNAP":"Technology","UBER":"Consumer","LYFT":"Consumer",
+}
+DEFAULT_SECTOR = "Other"
+
 with t5:
-    st.markdown("### 🤖 ML Model")
+    st.markdown(
+        '<div style="padding:4px 0 16px;">'
+        '<div style="font-size:0.88rem;color:rgba(255,255,255,0.45);">'
+        'Confidence heatmap for scanned stocks, colored by ML confidence and grouped by sector.'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    if not all_results:
+        st.info("Run a scan to populate the heatmap.")
+    else:
+        # Group by sector
+        sector_buckets: dict[str, list] = {}
+        for r in all_results:
+            sec = SECTOR_MAP.get(r["symbol"], DEFAULT_SECTOR)
+            sector_buckets.setdefault(sec, []).append(r)
+
+        # Sort sectors by average confidence
+        sorted_sectors = sorted(
+            sector_buckets.items(),
+            key=lambda x: sum(r["confidence"] for r in x[1]) / len(x[1]),
+            reverse=True,
+        )
+
+        hm_filter = st.selectbox(
+            "Filter by direction",
+            ["All", "Bullish", "Bearish"],
+            key="hm_dir",
+        )
+
+        for sector_name, sec_rows in sorted_sectors:
+            if hm_filter == "Bullish":
+                sec_rows = [r for r in sec_rows if r["direction"] == "bullish"]
+            elif hm_filter == "Bearish":
+                sec_rows = [r for r in sec_rows if r["direction"] == "bearish"]
+            if not sec_rows:
+                continue
+
+            avg_conf = sum(r["confidence"] for r in sec_rows) / len(sec_rows)
+            sec_col  = _cc(avg_conf)
+
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;margin-top:18px;">'
+                f'<span style="font-size:0.82rem;font-weight:700;color:#fff;">{sector_name}</span>'
+                f'<span style="font-size:0.68rem;color:rgba(255,255,255,0.35);">'
+                f'{len(sec_rows)} stocks · avg {avg_conf:.0f}%</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Grid: 8 columns
+            cols_per_row = 8
+            rows_data = [sec_rows[i:i+cols_per_row]
+                         for i in range(0, len(sec_rows), cols_per_row)]
+
+            for row_data in rows_data:
+                grid_cols = st.columns(cols_per_row)
+                for idx, r in enumerate(row_data):
+                    c = _cc(r["confidence"])
+                    bg_alpha = max(0.06, r["confidence"] / 100 * 0.3)
+                    cc_txt = "#00C805" if r["change_pct"] >= 0 else "#F23645"
+                    with grid_cols[idx]:
+                        st.markdown(
+                            f'<div class="heat-cell" style="background:rgba({_hex_to_rgb(c)},{bg_alpha:.2f});">'
+                            f'<div style="font-size:0.8rem;font-weight:700;color:#fff;">{r["symbol"]}</div>'
+                            f'<div style="font-size:0.95rem;font-weight:800;color:{c};">{r["confidence"]:.0f}%</div>'
+                            f'<div style="font-size:0.68rem;color:{cc_txt};margin-top:2px;">{_fp(r["change_pct"])}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(
+            '<div style="font-size:0.72rem;color:rgba(255,255,255,0.3);">'
+            '🟢 ≥90%&nbsp;&nbsp;🟩 ≥75%&nbsp;&nbsp;🟡 ≥60%&nbsp;&nbsp;🟠 ≥45%&nbsp;&nbsp;🔴 &lt;45%'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — MODEL
+# ═══════════════════════════════════════════════════════════════════════════════
+with t6:
     col_a, col_b = st.columns(2)
     with col_a:
+        st.markdown(
+            '<div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);'
+            'border-radius:14px;padding:22px 20px;">'
+            '<div style="font-size:0.75rem;font-weight:700;color:rgba(255,255,255,0.4);'
+            'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:14px;">Algorithm</div>',
+            unsafe_allow_html=True,
+        )
         status = "✅ Trained & active" if is_model_trained() else "⏳ Training in background…"
         st.markdown(f"""
 **Status:** {status}
@@ -705,43 +1210,56 @@ with t5:
 **Algorithm:** Gradient Boosting + Platt Calibration  
 **Training data:** 27 stocks × 2 years daily OHLCV  
 **Breakout label:** +5% within 5 trading days  
-**Features (18):** RSI+slope, MACD hist+slope, BB squeeze ratio,
-BB %B, Volume ratio (1d+5d), Price vs SMA 20/50/200,
-SMA slope, ATR%, 5d & 20d returns, distance from 52w high,
-OBV slope, BB width  
-**Validation:** 3-fold CV ROC-AUC
+
+**18 Features:** RSI + slope, MACD hist + slope, BB squeeze ratio, BB %B,
+Volume ratio (1d + 5d), Price vs SMA 20/50/200, SMA slope, ATR%, 5d & 20d returns,
+distance from 52-week high, OBV slope, BB width  
+
+**Validation:** 3-fold CV ROC-AUC  
+**Confidence formula:** 60% ML + 40% rule-based (RSI, MACD, volume, trend)
         """)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with col_b:
+        st.markdown(
+            '<div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);'
+            'border-radius:14px;padding:22px 20px;">'
+            '<div style="font-size:0.75rem;font-weight:700;color:rgba(255,255,255,0.4);'
+            'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:14px;">Pipeline</div>',
+            unsafe_allow_html=True,
+        )
         st.markdown(f"""
-**Full-market scan pipeline:**
-
 1. Fetch S&P 500 + NASDAQ-100 + Russell 2000 (~3,000 tickers)
 2. Batch pre-screen: price ≥ ${config.MIN_PRICE:.0f}, avg volume ≥ {config.MIN_AVG_VOLUME//1000:,}k
-3. Deep analysis on ~400-800 candidates with **{scanner._MAX_WORKERS} parallel threads**
+3. Deep analysis on ~400–800 candidates with **{scanner._MAX_WORKERS} parallel threads**
 4. Results sorted by ML confidence, top 200 stored
 
 **Alert fires when ALL:**  
 ✅ Confidence ≥ {config.ALERT_THRESHOLD:.0f}%  
 ✅ Direction is bullish  
 ✅ Not alerted same symbol in last 4 hours
-
-**Confidence = 60% ML + 40% rule-based**  
-(RSI, MACD, volume, trend)
         """)
-        st.markdown("---")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
         from ml_model import TRAINING_SYMBOLS
-        st.caption("Training symbols: " + ", ".join(TRAINING_SYMBOLS))
-        if st.button("🔁 Retrain Model (~3 min)"):
-            with st.spinner("Training…"):
+        with st.expander("Training symbols"):
+            st.caption(", ".join(TRAINING_SYMBOLS))
+
+        if st.button("🔁 Retrain Model", use_container_width=True):
+            with st.spinner("Training… (~3 min)"):
                 try:
                     train_model(force=True)
-                    st.success("Model retrained!")
+                    st.success("Model retrained successfully!")
                 except Exception as e:
                     st.error(f"Training failed: {e}")
 
     st.markdown("---")
     st.info(
         "⚠️ **Disclaimer:** BreakoutAI is for educational and research purposes only. "
-        "ML scores do not guarantee profitable trades. Always do your own due diligence."
+        "ML confidence scores do not guarantee profitable trades. "
+        "Always do your own due diligence before making any investment decision."
     )
+
+
