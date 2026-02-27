@@ -333,23 +333,27 @@ def _trade_plan_html(r: dict) -> str:
     if entry is None or sl is None:
         return ""
 
-    is_bull = r.get("direction", "bullish") == "bullish"
-    tp1  = r.get("take_profit_1") or r.get("tp1")
-    tp2  = r.get("take_profit_2") or r.get("tp2")
-    tp3  = r.get("take_profit_3") or r.get("tp3")
-    rr1  = r.get("rr1", 1.5)
-    rr2  = r.get("rr2", 2.5)
-    rr3  = r.get("rr3", 4.0)
-    risk = r.get("risk_per_share") or abs(entry - sl)
-    rpct = r.get("risk_pct", round(risk / (entry + 1e-9) * 100, 2))
-    pos  = r.get("position_pct", 2.0)
-    be   = r.get("breakeven")
-    er   = r.get("entry_reason", "")
-    sr   = r.get("stop_reason", "")
-    vwap = r.get("vwap")
-
-    arrow = "▲" if is_bull else "▼"
+    is_bull     = r.get("direction", "bullish") == "bullish"
+    tp1         = r.get("take_profit_1") or r.get("tp1")
+    tp2         = r.get("take_profit_2") or r.get("tp2")
+    tp3         = r.get("take_profit_3") or r.get("tp3")
+    rr1         = r.get("rr1", 1.5)
+    rr2         = r.get("rr2", 2.5)
+    rr3         = r.get("rr3", 4.0)
+    risk        = r.get("risk_per_share") or abs(entry - sl)
+    rpct        = r.get("risk_pct", round(risk / (entry + 1e-9) * 100, 2))
+    pos         = r.get("position_pct", 2.0)
+    be          = r.get("breakeven")
+    er          = r.get("entry_reason", "")
+    sr          = r.get("stop_reason", "")
+    vwap        = r.get("vwap")
+    arrow       = "▲" if is_bull else "▼"
     entry_color = "#00C805" if is_bull else "#F23645"
+    tp1_str     = f"${tp1:.2f}"  if tp1  else "—"
+    tp2_str     = f"${tp2:.2f}"  if tp2  else "—"
+    tp3_str     = f"${tp3:.2f}"  if tp3  else "—"
+    be_str      = f"${be:.2f}"   if be   else "—"
+    vwap_str    = f"${vwap:.2f}" if vwap else "—"
 
     def cell(label: str, val: str, color: str, sub: str = "") -> str:
         sub_html = (
@@ -361,53 +365,43 @@ def _trade_plan_html(r: dict) -> str:
             f'<div style="font-size:0.58rem;color:rgba(255,255,255,0.32);'
             f'letter-spacing:0.07em;text-transform:uppercase;">{label}</div>'
             f'<div style="font-size:0.9rem;font-weight:800;color:{color};">{val}</div>'
-            f'{sub_html}'
+            + sub_html +
             f'</div>'
         )
 
     sep  = '<div style="padding:11px 13px;border-right:1px solid rgba(255,255,255,0.05);">'
     sepl = '<div style="padding:11px 13px;">'
 
-    tp1_str  = f"${tp1:.2f}"  if tp1  else "—"
-    tp2_str  = f"${tp2:.2f}"  if tp2  else "—"
-    tp3_str  = f"${tp3:.2f}"  if tp3  else "—"
-    be_str   = f"${be:.2f}"   if be   else "—"
-    vwap_str = f"${vwap:.2f}" if vwap else "—"
-
-    rr1_str = f"1:{rr1}"
-    rr2_str = f"1:{rr2}"
-    rr3_str = f"1:{rr3}"
-
-    return (
-        f'<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.06);padding-top:14px;">'
+    header = (
+        '<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.06);padding-top:14px;">'
         f'<div style="font-size:0.62rem;font-weight:700;color:rgba(255,255,255,0.35);'
-        f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">'
-        f'{arrow} Trade Plan</div>'
-
-        # Row 1: Entry · Stop · Breakeven · VWAP · Risk
-        f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;'
-        f'background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06);'
-        f'border-radius:10px 10px 0 0;overflow:hidden;">'
-        + sep  + cell("Entry",     f"${entry:.2f}", entry_color,  er[:40] if er else "") + "</div>"
-        + sep  + cell("Stop Loss", f"${sl:.2f}",    "#F23645",    sr[:40] if sr else "") + "</div>"
-        + sep  + cell("Breakeven", be_str,          "rgba(255,255,255,0.6)") + "</div>"
-        + sep  + cell("VWAP",      vwap_str,        "rgba(255,255,255,0.5)") + "</div>"
-        + sepl + cell("Risk/Share", f"${risk:.2f} ({rpct:.1f}%)", "#eab308") + "</div>"
-        + f'</div>'
-
-        # Row 2: TP1 · TP2 · TP3 · Position size
-        f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;'
-        f'background:rgba(0,200,5,0.03);border:1px solid rgba(255,255,255,0.06);'
-        f'border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
-        + sep  + cell("TP 1",        tp1_str, "#00C805", f"R:R {rr1_str} — 50% exit")  + "</div>"
-        + sep  + cell("TP 2",        tp2_str, "#00C805", f"R:R {rr2_str} — 30% exit")  + "</div>"
-        + sep  + cell("TP 3 (runner)",tp3_str,"#22c55e", f"R:R {rr3_str} — 20% exit")  + "</div>"
-        + sepl + cell("Position Size", f"{pos:.1f}% of portfolio",
-                      "rgba(255,255,255,0.6)", "1% portfolio risk rule") + "</div>"
-        + f'</div>'
-
-        f'</div>'
+        f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">{arrow} Trade Plan</div>'
     )
+
+    row1 = (
+        '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;'
+        'background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06);'
+        'border-radius:10px 10px 0 0;overflow:hidden;">'
+        + sep  + cell("Entry",      f"${entry:.2f}",              entry_color,             er[:40] if er else "") + "</div>"
+        + sep  + cell("Stop Loss",  f"${sl:.2f}",                 "#F23645",               sr[:40] if sr else "") + "</div>"
+        + sep  + cell("Breakeven",  be_str,                       "rgba(255,255,255,0.6)")                        + "</div>"
+        + sep  + cell("VWAP",       vwap_str,                     "rgba(255,255,255,0.5)")                        + "</div>"
+        + sepl + cell("Risk/Share", f"${risk:.2f} ({rpct:.1f}%)", "#eab308")                                      + "</div>"
+        + "</div>"
+    )
+
+    row2 = (
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;'
+        'background:rgba(0,200,5,0.03);border:1px solid rgba(255,255,255,0.06);'
+        'border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
+        + sep  + cell("TP 1",          tp1_str, "#00C805",             f"R:R 1:{rr1} — 50% exit") + "</div>"
+        + sep  + cell("TP 2",          tp2_str, "#00C805",             f"R:R 1:{rr2} — 30% exit") + "</div>"
+        + sep  + cell("TP 3 (runner)", tp3_str, "#22c55e",             f"R:R 1:{rr3} — 20% exit") + "</div>"
+        + sepl + cell("Position Size", f"{pos:.1f}% of portfolio", "rgba(255,255,255,0.6)", "1% portfolio risk rule") + "</div>"
+        + "</div>"
+    )
+
+    return header + row1 + row2 + "</div>"
 
 def _stat_cell(label: str, value: str, color: str = "#fff") -> str:
     return (

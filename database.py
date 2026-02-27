@@ -59,6 +59,19 @@ def init_db() -> None:
         c.execute("CREATE INDEX IF NOT EXISTS idx_results_symbol ON scan_results(symbol)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_results_time   ON scan_results(scanned_at)")
 
+        # Evict persisted results that pre-date the entry/tp3/rr fields so
+        # stale rows don't suppress the new trade plan UI.
+        try:
+            row = c.execute(
+                "SELECT payload FROM scan_results LIMIT 1"
+            ).fetchone()
+            if row:
+                sample = json.loads(row["payload"])
+                if "entry" not in sample or "take_profit_3" not in sample:
+                    c.execute("DELETE FROM scan_results")
+        except Exception:
+            pass
+
 
 def save_alert(
     symbol: str, name: Optional[str], price: float, change_pct: float,
