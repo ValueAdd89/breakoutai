@@ -44,9 +44,17 @@ def init_db() -> None:
             price      REAL,
             scanned_at TEXT NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_alerts_symbol ON alerts(symbol);
-        CREATE INDEX IF NOT EXISTS idx_alerts_time   ON alerts(triggered_at);
-        CREATE INDEX IF NOT EXISTS idx_scan_symbol   ON scan_log(symbol);
+        CREATE TABLE IF NOT EXISTS scan_results (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol     TEXT NOT NULL,
+            payload    TEXT NOT NULL,
+            scanned_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_alerts_symbol  ON alerts(symbol);
+        CREATE INDEX IF NOT EXISTS idx_alerts_time    ON alerts(triggered_at);
+        CREATE INDEX IF NOT EXISTS idx_scan_symbol    ON scan_log(symbol);
+        CREATE INDEX IF NOT EXISTS idx_results_symbol ON scan_results(symbol);
+        CREATE INDEX IF NOT EXISTS idx_results_time   ON scan_results(scanned_at);
         """)
 
 
@@ -107,3 +115,44 @@ def get_scan_history(symbol: str, limit: int = 50) -> list[dict]:
             (symbol, limit),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Scan result persistence (survive restarts / market close) ─────────────────
+
+def save_scan_results(results: list[dict]) -> None:
+    """
+    Persist the full list of scan results to SQLite.
+    Replaces all previous rows — we only keep the most recent scan.
+    Each result is stored as a JSON blob keyed by symbol + timestamp.
+    """
+    if not results:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    with _lock, _conn() as c:
+        c.execute("DELETE FROM scan_results")
+        c.executemany(
+            "INSERT INTO scan_results (symbol, payload, scanned_at) VALUES (?, ?, ?)",
+            [(r["symbol"], json.dumps(r), now) for r in results],
+        )
+
+
+def load_scan_results() -> tuple[list[dict], Optional[str]]:
+    """
+    Load the most recently persisted scan results from SQLite.
+    Returns (results_list, scanned_at_iso_string).
+    Returns ([], None) if nothing is stored yet.
+    """
+    with _lock, _conn() as c:
+        rows = c.execute(
+            "SELECT payload, scanned_at FROM scan_results ORDER BY id ASC"
+        ).fetchall()
+    if not rows:
+        return [], None
+    results = []
+    for row in rows:
+        try:
+            results.append(json.loads(row["payload"]))
+        except Exception:
+            pass
+    scanned_at = rows[-1]["scanned_at"] if rows else None
+    return results, scanned_at

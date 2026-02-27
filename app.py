@@ -534,18 +534,38 @@ filtered = filtered[:max_results]
 
 # ── Page header ───────────────────────────────────────────────────────────────
 now_utc = datetime.now(timezone.utc)
-market_open = 13 <= now_utc.hour < 20  # rough NYSE window in UTC
+_wday = now_utc.weekday()
+_hour = now_utc.hour
+market_open = _wday < 5 and 14 <= _hour < 21   # Mon–Fri 14:30–21:00 UTC ≈ NYSE
 market_str  = '<span style="color:#00C805;">● Market Open</span>' if market_open else \
               '<span style="color:rgba(255,255,255,0.35);">○ Market Closed</span>'
 high_conf_all = [r for r in all_results if r["confidence"] >= config.ALERT_THRESHOLD]
+
+_last_scan = scanner.get_last_scan_time()
+if _last_scan:
+    _age_mins = int((now_utc - _last_scan.replace(tzinfo=timezone.utc)
+                     if _last_scan.tzinfo is None else
+                     now_utc - _last_scan).total_seconds() / 60)
+    _as_of = _last_scan.strftime("%b %d %H:%M UTC")
+    if not market_open and all_results:
+        _data_note = (
+            f'<span style="color:rgba(255,159,10,0.9);">⏱ Data as of {_as_of} '
+            f'({_age_mins:,} min ago)</span>'
+        )
+    else:
+        _data_note = f'<span style="color:rgba(255,255,255,0.3);">Last scan {_as_of}</span>'
+else:
+    _data_note = ""
 
 st.markdown(
     f'<div class="page-header">'
     f'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">'
     f'<div>'
     f'  <div class="page-header-title">BreakoutAI</div>'
-    f'  <div class="page-header-sub">{market_str}&nbsp;&nbsp;·&nbsp;&nbsp;'
-    f'  {now_utc.strftime("%b %d, %Y  %H:%M UTC")}</div>'
+    f'  <div class="page-header-sub">'
+    f'    {market_str}&nbsp;&nbsp;·&nbsp;&nbsp;{now_utc.strftime("%b %d, %Y  %H:%M UTC")}'
+    f'    {"&nbsp;&nbsp;·&nbsp;&nbsp;" + _data_note if _data_note else ""}'
+    f'  </div>'
     f'</div>'
     f'<div style="display:flex;gap:20px;flex-wrap:wrap;">'
     f'  <div style="text-align:center;">'

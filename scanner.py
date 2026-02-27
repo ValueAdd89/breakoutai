@@ -50,6 +50,7 @@ _progress_lock = threading.Lock()
 
 _last_scan_time: Optional[datetime] = None
 _alert_callbacks: list[Callable] = []
+_results_loaded_from_db: bool = False
 
 # Throttle: max parallel yfinance requests (be a good citizen)
 _MAX_WORKERS = 20
@@ -60,12 +61,34 @@ _TOP_N = 200
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def get_latest_results() -> list[dict]:
+    global _results_loaded_from_db
     with _results_lock:
+        # On first call after a restart, pre-populate from DB so results are
+        # immediately available while the fresh scan runs in the background.
+        if not _results_loaded_from_db:
+            _results_loaded_from_db = True
+            if not _results:
+                persisted, scanned_at = db.load_scan_results()
+                if persisted:
+                    _results.extend(persisted)
+                    logger.info(
+                        f"Loaded {len(persisted)} persisted results from DB "
+                        f"(as of {scanned_at})"
+                    )
         return list(_results)
 
 
 def get_last_scan_time() -> Optional[datetime]:
-    return _last_scan_time
+    if _last_scan_time:
+        return _last_scan_time
+    # Fall back to the timestamp from the persisted DB results
+    try:
+        _, scanned_at = db.load_scan_results()
+        if scanned_at:
+            return datetime.fromisoformat(scanned_at)
+    except Exception:
+        pass
+    return None
 
 
 def get_scan_progress() -> dict:
@@ -389,6 +412,12 @@ def _run_full_scan() -> None:
         with _results_lock:
             _results.clear()
             _results.extend(top)
+
+        # Persist to DB so results survive restarts and market-close periods
+        try:
+            db.save_scan_results(top)
+        except Exception as e:
+            logger.warning(f"Could not persist scan results: {e}")
 
         _last_scan_time = datetime.now(timezone.utc)
         elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(_scan_progress["started_at"])).seconds

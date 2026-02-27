@@ -17,8 +17,27 @@ import config
 
 logger = logging.getLogger(__name__)
 
-_price_cache: TTLCache = TTLCache(maxsize=300, ttl=300)
-_news_cache:  TTLCache = TTLCache(maxsize=100, ttl=300)
+
+def _market_open() -> bool:
+    """True during NYSE core hours Mon–Fri 09:30–16:00 ET (14:30–21:00 UTC)."""
+    now = datetime.now(timezone.utc)
+    if now.weekday() >= 5:          # Saturday / Sunday
+        return False
+    return 14 <= now.hour < 21      # rough UTC window
+
+
+def _price_ttl() -> int:
+    """5 min during market hours; 4 hours when closed — no point refetching stale data."""
+    return 300 if _market_open() else 14_400
+
+
+def _news_ttl() -> int:
+    """10 min during market hours; 1 hour when closed."""
+    return 600 if _market_open() else 3_600
+
+
+_price_cache: TTLCache = TTLCache(maxsize=500, ttl=_price_ttl())
+_news_cache:  TTLCache = TTLCache(maxsize=200, ttl=_news_ttl())
 
 COMPANY_NAMES: dict[str, str] = {
     "AAPL": "Apple Inc.",        "MSFT": "Microsoft Corp.",    "GOOGL": "Alphabet Inc.",
