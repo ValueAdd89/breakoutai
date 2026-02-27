@@ -383,12 +383,14 @@ def _conf_bar(confidence: float, color: str) -> str:
 
 
 def _render_breakout_card(r: dict) -> None:
-    is_bull = r["direction"] == "bullish"
-    col  = _cc(r["confidence"])
-    cc   = "#00C805" if r["change_pct"] >= 0 else "#F23645"
+    is_bull      = r["direction"] == "bullish"
+    col          = _cc(r["confidence"])
+    cc           = "#00C805" if r["change_pct"] >= 0 else "#F23645"
     border_color = "rgba(0,200,5,0.22)" if is_bull else "rgba(242,54,69,0.22)"
     glow_color   = "rgba(0,200,5,0.04)"  if is_bull else "rgba(242,54,69,0.04)"
     cat_label    = "Catalysts" if is_bull else "Risks"
+    rsi_color    = "#F23645" if r["rsi"] > 70 else "#00C805" if r["rsi"] < 35 else "#fff"
+    vol_color    = "#eab308" if r["vol_ratio"] >= 2 else "#fff"
 
     cats_html = "".join(
         f'<div style="font-size:0.73rem;color:rgba(255,255,255,0.5);'
@@ -396,76 +398,52 @@ def _render_breakout_card(r: dict) -> None:
         f'<span style="color:{col};margin-top:1px;">▸</span>{c}</div>'
         for c in r["catalysts"][:3]
     )
+    cats_section = (
+        f'<div style="margin-top:10px;padding-top:10px;'
+        f'border-top:1px solid rgba(255,255,255,0.05);">'
+        f'<div style="font-size:0.62rem;color:rgba(255,255,255,0.3);'
+        f'letter-spacing:0.07em;text-transform:uppercase;margin-bottom:4px;">{cat_label}</div>'
+        + cats_html + '</div>'
+    ) if r["catalysts"] else ""
 
-    trade_html = _trade_plan_html(r)
+    sep = '<div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">'
 
-    # RSI color
-    rsi_color = "#F23645" if r["rsi"] > 70 else "#00C805" if r["rsi"] < 35 else "#fff"
+    html = (
+        f'<div style="background:#0C0C10;border:1px solid {border_color};border-radius:16px;'
+        f'padding:20px 22px;margin-bottom:12px;box-shadow:0 0 24px {glow_color};">'
 
-    st.markdown(f"""
-    <div style="background:#0C0C10;border:1px solid {border_color};border-radius:16px;
-                padding:20px 22px;margin-bottom:12px;
-                box-shadow:0 0 24px {glow_color};
-                transition:border-color 0.2s,box-shadow 0.2s;">
+        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">'
+        f'<div style="min-width:0;">'
+        f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+        f'<span style="font-size:1.25rem;font-weight:800;color:#fff;letter-spacing:-0.01em;">{r["symbol"]}</span>'
+        f'{_dir_badge(r["direction"])}'
+        f'</div>'
+        f'<div style="font-size:0.72rem;color:rgba(255,255,255,0.38);margin-top:3px;">{r.get("name","")[:36]}</div>'
+        f'</div>'
+        f'<div style="text-align:right;flex-shrink:0;">'
+        f'<div style="font-size:1.7rem;font-weight:800;color:{col};letter-spacing:-0.02em;line-height:1;">{r["confidence"]:.1f}%</div>'
+        f'<div style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.1em;text-transform:uppercase;margin-top:2px;">Confidence</div>'
+        + _conf_bar(r["confidence"], col) +
+        f'</div>'
+        f'</div>'
 
-      <!-- Header row -->
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
+        f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;margin-top:16px;'
+        f'background:rgba(255,255,255,0.03);border-radius:10px;'
+        f'border:1px solid rgba(255,255,255,0.05);overflow:hidden;">'
+        + sep + _stat_cell("Price",  f'${r["price"]:.2f}')                     + "</div>"
+        + sep + _stat_cell("Today",  _fp(r["change_pct"]),   cc)                + "</div>"
+        + sep + _stat_cell("Score",  f'{r["final_score"]:.0f}/100', col)        + "</div>"
+        + sep + _stat_cell("RSI",    f'{r["rsi"]:.1f}',      rsi_color)         + "</div>"
+        + f'<div style="padding:10px 12px;">'
+        + _stat_cell("Volume", f'{r["vol_ratio"]:.1f}x', vol_color) + "</div>"
+        + f'</div>'
 
-        <!-- Left: symbol + name + badge -->
-        <div style="min-width:0;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span style="font-size:1.25rem;font-weight:800;color:#fff;
-                         letter-spacing:-0.01em;">{r['symbol']}</span>
-            {_dir_badge(r['direction'])}
-          </div>
-          <div style="font-size:0.72rem;color:rgba(255,255,255,0.38);margin-top:3px;
-                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;">
-            {r.get('name','')[:36]}
-          </div>
-        </div>
-
-        <!-- Right: confidence -->
-        <div style="text-align:right;flex-shrink:0;">
-          <div style="font-size:1.7rem;font-weight:800;color:{col};
-                      letter-spacing:-0.02em;line-height:1;">{r['confidence']:.1f}%</div>
-          <div style="font-size:0.58rem;color:rgba(255,255,255,0.3);
-                      letter-spacing:0.1em;text-transform:uppercase;margin-top:2px;">Confidence</div>
-          {_conf_bar(r['confidence'], col)}
-        </div>
-      </div>
-
-      <!-- Stats grid -->
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);
-                  gap:0;margin-top:16px;
-                  background:rgba(255,255,255,0.03);border-radius:10px;
-                  border:1px solid rgba(255,255,255,0.05);overflow:hidden;">
-        <div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">
-          {_stat_cell("Price", f"${r['price']:.2f}")}
-        </div>
-        <div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">
-          {_stat_cell("Today", _fp(r['change_pct']), cc)}
-        </div>
-        <div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">
-          {_stat_cell("Score", f"{r['final_score']:.0f}/100", col)}
-        </div>
-        <div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">
-          {_stat_cell("RSI", f"{r['rsi']:.1f}", rsi_color)}
-        </div>
-        <div style="padding:10px 12px;">
-          {_stat_cell("Volume", f"{r['vol_ratio']:.1f}x", "#eab308" if r['vol_ratio'] >= 2 else "#fff")}
-        </div>
-      </div>
-
-      <!-- Trade plan -->
-      {trade_html}
-
-      <!-- Signals -->
-      <div style="margin-top:10px;">{_badges(r['signals'])}</div>
-
-      <!-- Catalysts / Risks -->
-      {f'<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05);"><div style="font-size:0.62rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;margin-bottom:4px;">{cat_label}</div>{cats_html}</div>' if r['catalysts'] else ''}
-    </div>
-    """, unsafe_allow_html=True)
+        + _trade_plan_html(r)
+        + f'<div style="margin-top:10px;">{_badges(r["signals"])}</div>'
+        + cats_section
+        + f'</div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 def _kpi(label: str, value: str, color: str = "#fff", sub: str = "") -> str:
     sub_html = f'<div class="metric-delta">{sub}</div>' if sub else ""
@@ -948,6 +926,52 @@ with t2:
         unsafe_allow_html=True,
     )
 
+    def _expiry_card(r: dict, color: str) -> str:
+        cc        = "#00C805" if r["change_pct"] >= 0 else "#F23645"
+        rsi_c     = "#F23645" if r["rsi"] > 70 else "#00C805" if r["rsi"] < 35 else "rgba(255,255,255,0.7)"
+        vol_color = "#eab308" if r["vol_ratio"] >= 2 else "rgba(255,255,255,0.7)"
+        sqz       = '<span class="sig-bull">SQZ</span>' if r.get("bb_squeeze") else ""
+        cat       = (r["catalysts"][0][:72] + "…") if r["catalysts"] else ""
+        cat_html  = (
+            f'<div style="font-size:0.72rem;color:rgba(255,255,255,0.42);'
+            f'margin-top:8px;line-height:1.4;">'
+            f'<span style="color:{color};margin-right:4px;">▸</span>{cat}</div>'
+        ) if cat else ""
+
+        def sc(lbl: str, val: str, clr: str) -> str:
+            return (
+                f'<div style="display:flex;flex-direction:column;gap:2px;">'
+                f'<span style="font-size:0.58rem;color:rgba(255,255,255,0.3);'
+                f'letter-spacing:0.07em;text-transform:uppercase;">{lbl}</span>'
+                f'<span style="font-size:0.88rem;font-weight:700;color:{clr};">{val}</span>'
+                f'</div>'
+            )
+
+        return (
+            f'<div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);'
+            f'border-left:3px solid {color};border-radius:12px;'
+            f'padding:14px 16px;margin-bottom:8px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'flex-wrap:wrap;gap:10px;">'
+            f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+            f'<span style="font-size:1.05rem;font-weight:800;color:#fff;">{r["symbol"]}</span>'
+            f'<span style="font-size:0.68rem;color:rgba(255,255,255,0.35);">{r.get("name","")[:22]}</span>'
+            f'{_dir_badge(r["direction"])}{sqz}'
+            f'</div>'
+            f'<span style="font-size:1.35rem;font-weight:800;color:{color};">{r["confidence"]:.1f}%</span>'
+            f'</div>'
+            f'<div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;">'
+            + sc("Price",  f'${r["price"]:.2f}',          "#fff")
+            + sc("Today",  _fp(r["change_pct"]),           cc)
+            + sc("Volume", f'{r["vol_ratio"]:.1f}x',       vol_color)
+            + sc("RSI",    f'{r["rsi"]:.0f}',              rsi_c)
+            + sc("Score",  f'{r["final_score"]:.0f}/100',  "rgba(255,255,255,0.7)")
+            + f'</div>'
+            + cat_html
+            + f'<div style="margin-top:8px;">{_badges(r["signals"][:4])}</div>'
+            + f'</div>'
+        )
+
     any_results = False
     for exp_key in EXPIRY_ORDER:
         rows = expiry_groups[exp_key]
@@ -955,79 +979,12 @@ with t2:
             continue
         any_results = True
         label, desc, bg, color = EXPIRY_META[exp_key]
+        sorted_rows = sorted(rows, key=lambda x: x["confidence"], reverse=True)[:12]
 
-        st.markdown(
-            f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">'
-            f'<div style="font-size:1rem;font-weight:700;color:{color};">{label}</div>'
-            f'<div style="font-size:0.72rem;color:rgba(255,255,255,0.38);">{desc}</div>'
-            f'<div style="font-size:0.68rem;color:rgba(255,255,255,0.3);'
-            f'background:rgba(255,255,255,0.05);border-radius:20px;padding:2px 9px;">'
-            f'{len(rows)} stocks</div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        for r in sorted(rows, key=lambda x: x["confidence"], reverse=True)[:12]:
-            cc  = "#00C805" if r["change_pct"] >= 0 else "#F23645"
-            rsi_c = "#F23645" if r["rsi"] > 70 else "#00C805" if r["rsi"] < 35 else "rgba(255,255,255,0.7)"
-            cat_preview = (r["catalysts"][0][:72] + "…") if r["catalysts"] else ""
-            sqz_badge = '<span class="sig-bull">SQZ</span>' if r.get("bb_squeeze") else ""
-            vol_color = "#eab308" if r["vol_ratio"] >= 2 else "rgba(255,255,255,0.7)"
-            st.markdown(f"""
-            <div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);
-                        border-left:3px solid {color};border-radius:12px;
-                        padding:14px 16px;margin-bottom:8px;
-                        transition:background 0.15s,border-color 0.15s;">
-              <!-- Top row: symbol + stats + confidence -->
-              <div style="display:flex;justify-content:space-between;align-items:center;
-                          flex-wrap:wrap;gap:10px;">
-                <!-- Symbol block -->
-                <div style="display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap;">
-                  <span style="font-size:1.05rem;font-weight:800;color:#fff;
-                               letter-spacing:-0.01em;">{r['symbol']}</span>
-                  <span style="font-size:0.68rem;color:rgba(255,255,255,0.35);
-                               white-space:nowrap;overflow:hidden;max-width:130px;
-                               text-overflow:ellipsis;">{r.get('name','')[:22]}</span>
-                  {_dir_badge(r['direction'])}
-                  {sqz_badge}
-                </div>
-                <!-- Confidence badge -->
-                <div style="text-align:right;flex-shrink:0;">
-                  <span style="font-size:1.35rem;font-weight:800;color:{color};
-                               letter-spacing:-0.02em;">{r['confidence']:.1f}%</span>
-                </div>
-              </div>
-
-              <!-- Stats row -->
-              <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap;align-items:center;">
-                <div style="display:flex;flex-direction:column;gap:2px;">
-                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">Price</span>
-                  <span style="font-size:0.88rem;font-weight:700;color:#fff;">${r['price']:.2f}</span>
-                </div>
-                <div style="display:flex;flex-direction:column;gap:2px;">
-                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">Today</span>
-                  <span style="font-size:0.88rem;font-weight:700;color:{cc};">{_fp(r['change_pct'])}</span>
-                </div>
-                <div style="display:flex;flex-direction:column;gap:2px;">
-                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">Volume</span>
-                  <span style="font-size:0.88rem;font-weight:700;color:{vol_color};">{r['vol_ratio']:.1f}x</span>
-                </div>
-                <div style="display:flex;flex-direction:column;gap:2px;">
-                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">RSI</span>
-                  <span style="font-size:0.88rem;font-weight:700;color:{rsi_c};">{r['rsi']:.0f}</span>
-                </div>
-                <div style="display:flex;flex-direction:column;gap:2px;">
-                  <span style="font-size:0.58rem;color:rgba(255,255,255,0.3);letter-spacing:0.07em;text-transform:uppercase;">Score</span>
-                  <span style="font-size:0.88rem;font-weight:700;color:rgba(255,255,255,0.7);">{r['final_score']:.0f}/100</span>
-                </div>
-              </div>
-
-              <!-- Catalyst preview + signals -->
-              {f'<div style="font-size:0.72rem;color:rgba(255,255,255,0.42);margin-top:8px;line-height:1.4;"><span style="color:{color};margin-right:4px;">▸</span>{cat_preview}</div>' if cat_preview else ""}
-              <div style="margin-top:8px;">{_badges(r['signals'][:4])}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
+        expander_label = f"{label}  ·  {desc}  ·  {len(rows)} stocks"
+        with st.expander(expander_label, expanded=(exp_key in ("0dte", "2dte", "weeklies"))):
+            cards_html = "".join(_expiry_card(r, color) for r in sorted_rows)
+            st.markdown(cards_html, unsafe_allow_html=True)
 
     if not any_results:
         st.info("Run a scan to populate expiry signals. Stocks are assigned to 0DTE → Yearly based on technical setup + catalysts.")
