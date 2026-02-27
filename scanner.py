@@ -25,7 +25,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import config
 import database as db
 from universe import get_screened_candidates, get_universe_names
-from data_engine import get_price_data, get_quote, fetch_news, compute_sentiment_score, compute_indicators
+from data_engine import get_price_data, get_quote, fetch_news, compute_sentiment_score, compute_indicators, compute_entry_exit
 from ml_model import get_confidence
 from alerts import send_alert_email
 
@@ -244,27 +244,11 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             if neg_news:
                 catalysts.append(f'Negative: "{neg_news[0]["title"][:55]}"')
 
-        # Profit-enhancing: stop-loss, take-profit, support/resistance, position size
         price = quote.get("price", 0.0)
-        atr = ind["atr"] or (price * 0.02)
-        bb_lo = ind.get("bb_lower") or ind["sma20"] - atr
-        bb_up = ind.get("bb_upper") or ind["sma20"] + atr
-        if direction == "bullish":
-            stop_loss = round(price - 1.5 * atr, 2)
-            take_profit_1 = round(price + 2.0 * atr, 2)
-            take_profit_2 = round(price + 3.0 * atr, 2)
-            support = round(min(bb_lo, ind["sma20"]), 2)
-            resistance = round(max(bb_up, ind["sma50"]), 2)
-        else:
-            stop_loss = round(price + 1.5 * atr, 2)
-            take_profit_1 = round(price - 2.0 * atr, 2)
-            take_profit_2 = round(price - 3.0 * atr, 2)
-            support = round(bb_lo, 2)
-            resistance = round(max(ind["sma20"], bb_up), 2)
-        atr_pct = (atr / (price + 1e-9)) * 100
-        risk_reward = round(2.0 * atr / (1.5 * atr + 1e-9), 1)
-        # Lower vol = larger suggested position; cap at 5%
-        position_pct = min(5.0, max(1.0, round(3.0 / max(0.5, atr_pct), 1)))
+        atr   = ind["atr"] or (price * 0.02)
+
+        # Precise entry / exit levels derived from swing pivots, VWAP, BB, SMAs
+        trade = compute_entry_exit(df, direction, price, atr)
 
         return {
             "symbol":          symbol,
@@ -281,7 +265,7 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             "macd_hist":       ind["macd_hist"],
             "vol_ratio":       ind["vol_ratio"],
             "bb_squeeze":      ind["bb_squeeze"],
-            "atr":             atr,
+            "atr":             round(atr, 2),
             "sma20":           ind["sma20"],
             "sma50":           ind["sma50"],
             "sma200":          ind["sma200"],
@@ -290,13 +274,26 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             "news":            news[:5],
             "sentiment_score": sentiment_score,
             "scanned_at":      datetime.now(timezone.utc).isoformat(),
-            "stop_loss":       stop_loss,
-            "take_profit_1":   take_profit_1,
-            "take_profit_2":   take_profit_2,
-            "support":         support,
-            "resistance":      resistance,
-            "risk_reward":     risk_reward,
-            "position_pct":    position_pct,
+            # ── Precise trade plan ──
+            "entry":           trade["entry"],
+            "stop_loss":       trade["stop_loss"],
+            "take_profit_1":   trade["tp1"],
+            "take_profit_2":   trade["tp2"],
+            "take_profit_3":   trade["tp3"],
+            "risk_per_share":  trade["risk_per_share"],
+            "risk_pct":        trade["risk_pct"],
+            "rr1":             trade["rr1"],
+            "rr2":             trade["rr2"],
+            "rr3":             trade["rr3"],
+            "breakeven":       trade["breakeven"],
+            "position_pct":    trade["position_pct"],
+            "entry_reason":    trade["entry_reason"],
+            "stop_reason":     trade["stop_reason"],
+            "support":         trade["support"],
+            "resistance":      trade["resistance"],
+            "vwap":            trade["vwap"],
+            # keep old keys for backward compat with persisted results
+            "risk_reward":     trade["rr2"],
             "expiry_signal":   _assign_expiry_signal(
                 price=price, sma20=ind["sma20"], sma50=ind["sma50"], sma200=ind["sma200"],
                 bb_squeeze=ind["bb_squeeze"], vol_ratio=ind["vol_ratio"],

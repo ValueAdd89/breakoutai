@@ -327,38 +327,86 @@ def _dir_badge(d: str) -> str:
     return '<span class="dir-neut">Neutral</span>'
 
 def _trade_plan_html(r: dict) -> str:
-    if r.get("stop_loss") is None or r.get("take_profit_1") is None:
+    """Full precision entry / exit panel embedded in a breakout card."""
+    entry = r.get("entry") or r.get("price")
+    sl    = r.get("stop_loss")
+    if entry is None or sl is None:
         return ""
 
-    def _tp_cell(label: str, val: str, color: str) -> str:
+    is_bull = r.get("direction", "bullish") == "bullish"
+    tp1  = r.get("take_profit_1") or r.get("tp1")
+    tp2  = r.get("take_profit_2") or r.get("tp2")
+    tp3  = r.get("take_profit_3") or r.get("tp3")
+    rr1  = r.get("rr1", 1.5)
+    rr2  = r.get("rr2", 2.5)
+    rr3  = r.get("rr3", 4.0)
+    risk = r.get("risk_per_share") or abs(entry - sl)
+    rpct = r.get("risk_pct", round(risk / (entry + 1e-9) * 100, 2))
+    pos  = r.get("position_pct", 2.0)
+    be   = r.get("breakeven")
+    er   = r.get("entry_reason", "")
+    sr   = r.get("stop_reason", "")
+    vwap = r.get("vwap")
+
+    arrow = "▲" if is_bull else "▼"
+    entry_color = "#00C805" if is_bull else "#F23645"
+
+    def cell(label: str, val: str, color: str, sub: str = "") -> str:
+        sub_html = (
+            f'<div style="font-size:0.58rem;color:rgba(255,255,255,0.28);'
+            f'margin-top:2px;line-height:1.3;">{sub}</div>'
+        ) if sub else ""
         return (
-            f'<div style="display:flex;flex-direction:column;gap:2px;">'
-            f'<div style="font-size:0.58rem;color:rgba(255,255,255,0.3);'
+            f'<div style="display:flex;flex-direction:column;gap:1px;">'
+            f'<div style="font-size:0.58rem;color:rgba(255,255,255,0.32);'
             f'letter-spacing:0.07em;text-transform:uppercase;">{label}</div>'
-            f'<div style="font-size:0.85rem;font-weight:700;color:{color};">{val}</div>'
+            f'<div style="font-size:0.9rem;font-weight:800;color:{color};">{val}</div>'
+            f'{sub_html}'
             f'</div>'
         )
 
-    sl   = f"${r['stop_loss']:.2f}"
-    tp1  = f"${r['take_profit_1']:.2f}"
-    tp2  = f"${r['take_profit_2']:.2f}"
-    sup  = f"${r.get('support', 0):.0f}"
-    res  = f"${r.get('resistance', 0):.0f}"
-    rr   = f"1:{r.get('risk_reward', 2):.1f} · {r.get('position_pct', 2):.1f}%"
-    div  = '<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
-    divl = '<div style="padding:9px 11px;">'
+    sep  = '<div style="padding:11px 13px;border-right:1px solid rgba(255,255,255,0.05);">'
+    sepl = '<div style="padding:11px 13px;">'
+
+    tp1_str  = f"${tp1:.2f}"  if tp1  else "—"
+    tp2_str  = f"${tp2:.2f}"  if tp2  else "—"
+    tp3_str  = f"${tp3:.2f}"  if tp3  else "—"
+    be_str   = f"${be:.2f}"   if be   else "—"
+    vwap_str = f"${vwap:.2f}" if vwap else "—"
+
+    rr1_str = f"1:{rr1}"
+    rr2_str = f"1:{rr2}"
+    rr3_str = f"1:{rr3}"
 
     return (
-        '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:0;'
-        'margin-top:12px;background:rgba(255,255,255,0.025);'
-        'border:1px solid rgba(255,255,255,0.06);border-radius:10px;overflow:hidden;">'
-        + div  + _tp_cell("Stop Loss",  sl,  "#F23645")             + "</div>"
-        + div  + _tp_cell("TP 1",       tp1, "#00C805")              + "</div>"
-        + div  + _tp_cell("TP 2",       tp2, "#00C805")              + "</div>"
-        + div  + _tp_cell("Support",    sup, "rgba(255,255,255,0.6)") + "</div>"
-        + div  + _tp_cell("Resistance", res, "rgba(255,255,255,0.6)") + "</div>"
-        + divl + _tp_cell("R:R / Size", rr,  "rgba(255,255,255,0.6)") + "</div>"
-        + "</div>"
+        f'<div style="margin-top:14px;border-top:1px solid rgba(255,255,255,0.06);padding-top:14px;">'
+        f'<div style="font-size:0.62rem;font-weight:700;color:rgba(255,255,255,0.35);'
+        f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">'
+        f'{arrow} Trade Plan</div>'
+
+        # Row 1: Entry · Stop · Breakeven · VWAP · Risk
+        f'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;'
+        f'background:rgba(255,255,255,0.025);border:1px solid rgba(255,255,255,0.06);'
+        f'border-radius:10px 10px 0 0;overflow:hidden;">'
+        + sep  + cell("Entry",     f"${entry:.2f}", entry_color,  er[:40] if er else "") + "</div>"
+        + sep  + cell("Stop Loss", f"${sl:.2f}",    "#F23645",    sr[:40] if sr else "") + "</div>"
+        + sep  + cell("Breakeven", be_str,          "rgba(255,255,255,0.6)") + "</div>"
+        + sep  + cell("VWAP",      vwap_str,        "rgba(255,255,255,0.5)") + "</div>"
+        + sepl + cell("Risk/Share", f"${risk:.2f} ({rpct:.1f}%)", "#eab308") + "</div>"
+        + f'</div>'
+
+        # Row 2: TP1 · TP2 · TP3 · Position size
+        f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;'
+        f'background:rgba(0,200,5,0.03);border:1px solid rgba(255,255,255,0.06);'
+        f'border-top:none;border-radius:0 0 10px 10px;overflow:hidden;">'
+        + sep  + cell("TP 1",        tp1_str, "#00C805", f"R:R {rr1_str} — 50% exit")  + "</div>"
+        + sep  + cell("TP 2",        tp2_str, "#00C805", f"R:R {rr2_str} — 30% exit")  + "</div>"
+        + sep  + cell("TP 3 (runner)",tp3_str,"#22c55e", f"R:R {rr3_str} — 20% exit")  + "</div>"
+        + sepl + cell("Position Size", f"{pos:.1f}% of portfolio",
+                      "rgba(255,255,255,0.6)", "1% portfolio risk rule") + "</div>"
+        + f'</div>'
+
+        f'</div>'
     )
 
 def _stat_cell(label: str, value: str, color: str = "#fff") -> str:
@@ -1150,6 +1198,43 @@ with t4:
                 ), row=1, col=1)
 
                 res = next((r for r in live if r["symbol"] == sym), None)
+                is_bull_chart = res["direction"] == "bullish" if res else True
+                entry_price = res.get("entry") if res else None
+                sl_price    = res.get("stop_loss") if res else None
+                tp1_price   = res.get("take_profit_1") if res else None
+                tp2_price   = res.get("take_profit_2") if res else None
+                tp3_price   = res.get("take_profit_3") if res else None
+
+                # ── Horizontal level lines on price chart ─────────────────────
+                x_range = [df[dc].iloc[0], df[dc].iloc[-1]]
+
+                def _hline(price_val, color, label, dash="solid", width=1.5):
+                    if price_val is None:
+                        return
+                    fig.add_shape(type="line", x0=x_range[0], x1=x_range[1],
+                                  y0=price_val, y1=price_val,
+                                  line=dict(color=color, width=width, dash=dash),
+                                  row=1, col=1)
+                    fig.add_annotation(
+                        x=x_range[1], y=price_val,
+                        text=f"  {label} ${price_val:.2f}",
+                        showarrow=False, xanchor="left",
+                        font=dict(color=color, size=10),
+                        row=1, col=1,
+                    )
+
+                if entry_price:
+                    _hline(entry_price, "#00C805",  "ENTRY", dash="solid",  width=2)
+                if sl_price:
+                    _hline(sl_price,    "#F23645",  "STOP",  dash="dash",   width=1.5)
+                if tp1_price:
+                    _hline(tp1_price,   "#22c55e",  "TP1",   dash="dot",    width=1.2)
+                if tp2_price:
+                    _hline(tp2_price,   "#00C805",  "TP2",   dash="dot",    width=1.2)
+                if tp3_price:
+                    _hline(tp3_price,   "#86efac",  "TP3",   dash="dot",    width=1)
+
+                # Confidence annotation on last candle
                 if res and res["confidence"] >= config.ALERT_THRESHOLD:
                     fig.add_annotation(
                         x=df[dc].iloc[-1], y=float(close.iloc[-1]),
@@ -1184,7 +1269,7 @@ with t4:
                 fig.update_layout(
                     paper_bgcolor="#050507", plot_bgcolor="#0A0A0D",
                     font=dict(color="rgba(255,255,255,0.6)", family="Inter, sans-serif"),
-                    height=600,
+                    height=620,
                     xaxis=dict(**axis_style, rangeslider_visible=False),
                     xaxis2=dict(**axis_style),
                     xaxis3=dict(**axis_style),
@@ -1193,10 +1278,11 @@ with t4:
                     yaxis3=dict(**axis_style, range=[0, 100]),
                     legend=dict(bgcolor="#0A0A0D", bordercolor="rgba(255,255,255,0.07)",
                                 orientation="h", y=-0.06, font=dict(size=11)),
-                    margin=dict(l=8, r=8, t=20, b=8),
+                    margin=dict(l=8, r=60, t=20, b=8),
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
+                # ── Precision trade panel below chart ─────────────────────────
                 if res:
                     st.markdown("---")
                     m1, m2, m3, m4, m5 = st.columns(5)
@@ -1205,17 +1291,14 @@ with t4:
                     m3.metric("RSI",            f"{res['rsi']:.1f}")
                     m4.metric("Volume Ratio",   f"{res['vol_ratio']:.2f}x")
                     m5.metric("Direction",      res["direction"].upper())
-                    if res.get("stop_loss") is not None:
-                        st.markdown("**Trade plan (ATR-based):**")
-                        p1, p2, p3, p4, p5 = st.columns(5)
-                        p1.metric("Stop-loss", f"${res['stop_loss']:.2f}")
-                        p2.metric("TP1",       f"${res['take_profit_1']:.2f}")
-                        p3.metric("TP2",       f"${res['take_profit_2']:.2f}")
-                        p4.metric("Support / Resistance",
-                                  f"${res.get('support',0):.0f} / ${res.get('resistance',0):.0f}")
-                        p5.metric("R:R · Position",
-                                  f"1:{res.get('risk_reward',2):.1f} · {res.get('position_pct',2):.1f}%")
-                    if res["catalysts"]:
+
+                    if res.get("entry") is not None:
+                        st.markdown(
+                            _trade_plan_html(res),
+                            unsafe_allow_html=True,
+                        )
+
+                    if res.get("catalysts"):
                         st.markdown("**Catalysts / Risks:**")
                         for c in res["catalysts"]:
                             st.markdown(f"- {c}")

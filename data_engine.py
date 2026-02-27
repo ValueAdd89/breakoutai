@@ -170,6 +170,211 @@ def fetch_news(symbol: str) -> list[dict]:
     return unique[:12]
 
 
+def compute_entry_exit(
+    df: pd.DataFrame,
+    direction: str,
+    current_price: float,
+    atr: float,
+) -> dict:
+    """
+    Compute precise entry, stop-loss, and take-profit levels.
+
+    Methodology (priority order):
+      Entry  — nearest key level the price should confirm above/below:
+               BB upper/lower band, recent swing pivot, or key SMA.
+               For bullish: entry = max(current, BB upper, recent breakout level).
+               A small ATR buffer is added so we buy on confirmed breakout.
+      Stop   — placed below the most recent swing low (bullish) or above the
+               most recent swing high (bearish), then widened by 0.25×ATR as
+               breathing room. Never closer than 0.5×ATR from entry.
+      TP1    — 1.5× risk from entry  (conservative, ~50% of position)
+      TP2    — 2.5× risk from entry  (full target, remaining position)
+      TP3    — 4.0× risk from entry  (runner, if momentum persists)
+
+    All prices rounded to 2 decimal places.
+    Returns dict with keys: entry, stop_loss, tp1, tp2, tp3,
+            risk_per_share, risk_pct, rr1, rr2, rr3,
+            entry_reason, stop_reason, support, resistance,
+            position_pct, breakeven.
+    """
+    close  = df["close"]
+    high   = df["high"]
+    low    = df["low"]
+
+    # ── Swing pivots (last 20 bars) ───────────────────────────────────────────
+    window = 5   # pivot window
+    n      = len(df)
+
+    swing_highs = []
+    swing_lows  = []
+    for i in range(window, min(n - window, n)):
+        if high.iloc[i] == high.iloc[i-window:i+window+1].max():
+            swing_highs.append(float(high.iloc[i]))
+        if low.iloc[i]  == low.iloc[i-window:i+window+1].min():
+            swing_lows.append(float(low.iloc[i]))
+
+    # Most recent swing levels (last 20 bars)
+    recent_highs = sorted(swing_highs[-10:], reverse=True) if swing_highs else []
+    recent_lows  = sorted(swing_lows[-10:])                if swing_lows  else []
+
+    sma20  = float(close.rolling(20).mean().iloc[-1])
+    sma50  = float(close.rolling(50).mean().iloc[-1])
+    std20  = float(close.rolling(20).std().iloc[-1])
+    bb_up  = sma20 + 2 * std20
+    bb_lo  = sma20 - 2 * std20
+
+    # ── VWAP (rolling 20-day intraday approximation using daily OHLC) ─────────
+    typical = ((df["high"] + df["low"] + df["close"]) / 3).iloc[-20:]
+    vol20   = df["volume"].iloc[-20:]
+    vwap    = float((typical * vol20).sum() / (vol20.sum() + 1e-9))
+
+    # ── Entry logic ───────────────────────────────────────────────────────────
+    entry_reason = ""
+    stop_reason  = ""
+
+    if direction == "bullish":
+        # Candidate levels the price needs to clear
+        candidates = [current_price]
+        if bb_up > current_price * 0.998:   # BB upper is near/above → breakout above it
+            candidates.append(bb_up + 0.01)
+        above_sma20 = current_price > sma20
+        if not above_sma20:                 # Not yet above SMA20 → wait for reclaim
+            candidates.append(sma20 + 0.01)
+        if recent_highs:
+            # Nearest swing high above current price = breakout level
+            levels_above = [h for h in recent_highs if h > current_price * 0.995]
+            if levels_above:
+                candidates.append(min(levels_above) + 0.01)
+
+        entry = round(min(candidates) + atr * 0.10, 2)   # tiny confirmation buffer
+        if entry <= current_price:
+            entry = round(current_price + atr * 0.05, 2)
+
+        # Entry reason
+        if abs(entry - bb_up) < atr * 0.3:
+            entry_reason = f"Breakout above BB upper band (${bb_up:.2f})"
+        elif abs(entry - sma20) < atr * 0.3:
+            entry_reason = f"Reclaim above SMA20 (${sma20:.2f})"
+        else:
+            entry_reason = f"Breakout above swing pivot (${entry:.2f})"
+
+        # Stop: below nearest swing low, or BB lower, whichever is higher
+        # (tighter stop = better R:R)
+        stop_candidates = [bb_lo - atr * 0.25]
+        levels_below = [l for l in recent_lows if l < entry * 0.999]
+        if levels_below:
+            stop_candidates.append(max(levels_below) - atr * 0.25)
+        if vwap < entry:
+            stop_candidates.append(vwap - atr * 0.15)
+
+        stop_loss = round(max(stop_candidates), 2)
+        # Enforce minimum distance
+        if entry - stop_loss < atr * 0.5:
+            stop_loss = round(entry - atr * 0.5, 2)
+
+        if abs(stop_loss - bb_lo) < atr * 0.3:
+            stop_reason = f"Below BB lower band (${bb_lo:.2f})"
+        elif levels_below and abs(stop_loss - max(levels_below)) < atr * 0.4:
+            stop_reason = f"Below swing low (${max(levels_below):.2f})"
+        else:
+            stop_reason = f"Below VWAP (${vwap:.2f})"
+
+    else:  # bearish / short
+        candidates = [current_price]
+        if bb_lo < current_price * 1.002:
+            candidates.append(bb_lo - 0.01)
+        below_sma20 = current_price < sma20
+        if not below_sma20:
+            candidates.append(sma20 - 0.01)
+        if recent_lows:
+            levels_below = [l for l in recent_lows if l < current_price * 1.005]
+            if levels_below:
+                candidates.append(max(levels_below) - 0.01)
+
+        entry = round(max(candidates) - atr * 0.10, 2)
+        if entry >= current_price:
+            entry = round(current_price - atr * 0.05, 2)
+
+        if abs(entry - bb_lo) < atr * 0.3:
+            entry_reason = f"Breakdown below BB lower band (${bb_lo:.2f})"
+        elif abs(entry - sma20) < atr * 0.3:
+            entry_reason = f"Break below SMA20 (${sma20:.2f})"
+        else:
+            entry_reason = f"Breakdown below swing pivot (${entry:.2f})"
+
+        stop_candidates = [bb_up + atr * 0.25]
+        levels_above = [h for h in recent_highs if h > entry * 1.001]
+        if levels_above:
+            stop_candidates.append(min(levels_above) + atr * 0.25)
+        if vwap > entry:
+            stop_candidates.append(vwap + atr * 0.15)
+
+        stop_loss = round(min(stop_candidates), 2)
+        if stop_loss - entry < atr * 0.5:
+            stop_loss = round(entry + atr * 0.5, 2)
+
+        if abs(stop_loss - bb_up) < atr * 0.3:
+            stop_reason = f"Above BB upper band (${bb_up:.2f})"
+        elif levels_above and abs(stop_loss - min(levels_above)) < atr * 0.4:
+            stop_reason = f"Above swing high (${min(levels_above):.2f})"
+        else:
+            stop_reason = f"Above VWAP (${vwap:.2f})"
+
+    # ── Risk / Reward ─────────────────────────────────────────────────────────
+    risk = abs(entry - stop_loss)
+    if risk < 1e-6:
+        risk = atr * 0.5
+
+    if direction == "bullish":
+        tp1 = round(entry + 1.5 * risk, 2)
+        tp2 = round(entry + 2.5 * risk, 2)
+        tp3 = round(entry + 4.0 * risk, 2)
+    else:
+        tp1 = round(entry - 1.5 * risk, 2)
+        tp2 = round(entry - 2.5 * risk, 2)
+        tp3 = round(entry - 4.0 * risk, 2)
+
+    rr1 = round(1.5, 1)
+    rr2 = round(2.5, 1)
+    rr3 = round(4.0, 1)
+
+    risk_pct = round((risk / (entry + 1e-9)) * 100, 2)
+
+    # Position size: risk 1% of portfolio per trade, capped at 5%
+    # position_pct = (1% portfolio risk) / risk_pct_per_share
+    position_pct = round(min(5.0, max(0.5, 1.0 / max(0.1, risk_pct) * 100)), 1)
+
+    breakeven = round(entry + risk * 0.15, 2) if direction == "bullish" \
+                else round(entry - risk * 0.15, 2)
+
+    support    = round(min(bb_lo, min(recent_lows[-3:]) if recent_lows else bb_lo), 2)
+    resistance = round(max(bb_up, max(recent_highs[:3]) if recent_highs else bb_up), 2)
+
+    return {
+        "entry":         entry,
+        "stop_loss":     stop_loss,
+        "tp1":           tp1,
+        "tp2":           tp2,
+        "tp3":           tp3,
+        "rr1":           rr1,
+        "rr2":           rr2,
+        "rr3":           rr3,
+        "risk_per_share": round(risk, 2),
+        "risk_pct":      risk_pct,
+        "position_pct":  position_pct,
+        "breakeven":     breakeven,
+        "entry_reason":  entry_reason,
+        "stop_reason":   stop_reason,
+        "support":       support,
+        "resistance":    resistance,
+        "vwap":          round(vwap, 2),
+        "bb_upper":      round(bb_up, 2),
+        "bb_lower":      round(bb_lo, 2),
+        "sma20":         round(sma20, 2),
+        "sma50":         round(sma50, 2),
+    }
+
+
 def compute_sentiment_score(news: list[dict]) -> float:
     if not news:
         return 50.0
