@@ -424,7 +424,8 @@ def _conf_bar(confidence: float, color: str) -> str:
     )
 
 
-def _render_breakout_card(r: dict) -> None:
+def _breakout_card_html(r: dict) -> str:
+    """Return the HTML string for a single breakout card (no st.markdown call)."""
     is_bull      = r["direction"] == "bullish"
     col          = _cc(r["confidence"])
     cc           = "#00C805" if r["change_pct"] >= 0 else "#F23645"
@@ -450,9 +451,9 @@ def _render_breakout_card(r: dict) -> None:
 
     sep = '<div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">'
 
-    html = (
+    return (
         f'<div style="background:#0C0C10;border:1px solid {border_color};border-radius:16px;'
-        f'padding:20px 22px;margin-bottom:12px;box-shadow:0 0 24px {glow_color};">'
+        f'padding:20px 22px;box-shadow:0 0 24px {glow_color};">'
 
         f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">'
         f'<div style="min-width:0;">'
@@ -485,7 +486,11 @@ def _render_breakout_card(r: dict) -> None:
         + cats_section
         + f'</div>'
     )
-    st.markdown(html, unsafe_allow_html=True)
+
+
+def _render_breakout_card(r: dict) -> None:
+    """Render a single breakout card (used when a grid wrapper is not needed)."""
+    st.markdown(_breakout_card_html(r), unsafe_allow_html=True)
 
 def _kpi(label: str, value: str, color: str = "#fff", sub: str = "") -> str:
     sub_html = f'<div class="metric-delta">{sub}</div>' if sub else ""
@@ -760,27 +765,17 @@ with t1:
         hc_bull = [r for r in high_conf_all if r["direction"] == "bullish"]
         hc_bear = [r for r in high_conf_all if r["direction"] == "bearish"]
 
-        hc_col1, hc_col2 = st.columns(2)
-        with hc_col1:
-            if hc_bull:
-                st.markdown(
-                    f'<div style="font-size:0.78rem;font-weight:600;color:#00C805;'
-                    f'letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">'
-                    f'▲ Bullish ({len(hc_bull)})</div>',
-                    unsafe_allow_html=True,
-                )
-                for r in sorted(hc_bull, key=lambda x: x["confidence"], reverse=True)[:5]:
-                    _render_breakout_card(r)
-        with hc_col2:
-            if hc_bear:
-                st.markdown(
-                    f'<div style="font-size:0.78rem;font-weight:600;color:#F23645;'
-                    f'letter-spacing:0.06em;text-transform:uppercase;margin-bottom:10px;">'
-                    f'▼ Bearish ({len(hc_bear)})</div>',
-                    unsafe_allow_html=True,
-                )
-                for r in sorted(hc_bear, key=lambda x: x["confidence"], reverse=True)[:5]:
-                    _render_breakout_card(r)
+        # Interleave bull/bear so the grid reads left-to-right naturally
+        top_bull = sorted(hc_bull, key=lambda x: x["confidence"], reverse=True)[:5]
+        top_bear = sorted(hc_bear, key=lambda x: x["confidence"], reverse=True)[:5]
+        hc_cards_html = "".join(_breakout_card_html(r) for r in top_bull + top_bear)
+        st.markdown(
+            '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));'
+            'gap:14px;align-items:start;">'
+            + hc_cards_html +
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
     # Full results — sub-tabs by direction
     if all_results:
@@ -1065,7 +1060,7 @@ with t2:
         return (
             f'<div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);'
             f'border-left:3px solid {color};border-radius:12px;'
-            f'padding:14px 16px;margin-bottom:8px;">'
+            f'padding:14px 16px;">'
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
             f'flex-wrap:wrap;gap:10px;">'
             f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
@@ -1099,8 +1094,14 @@ with t2:
 
         expander_label = f"{label}  ·  {desc}  ·  {len(rows)} stocks"
         with st.expander(expander_label, expanded=(exp_key in ("0dte", "2dte", "weeklies"))):
-            cards_html = "".join(_expiry_card(r, color) for r in sorted_rows)
-            st.markdown(cards_html, unsafe_allow_html=True)
+            inner = "".join(_expiry_card(r, color) for r in sorted_rows)
+            st.markdown(
+                '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));'
+                'gap:12px;align-items:start;">'
+                + inner +
+                '</div>',
+                unsafe_allow_html=True,
+            )
 
     if not any_results:
         st.info("Run a scan to populate expiry signals. Stocks are assigned to 0DTE → Yearly based on technical setup + catalysts.")
