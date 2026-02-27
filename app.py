@@ -974,6 +974,7 @@ with t2:
         vol_color = "#eab308" if r["vol_ratio"] >= 2 else "rgba(255,255,255,0.7)"
         sqz       = '<span class="sig-bull">SQZ</span>' if r.get("bb_squeeze") else ""
         cat       = (r["catalysts"][0][:72] + "…") if r["catalysts"] else ""
+        is_bull   = r.get("direction") == "bullish"
         cat_html  = (
             f'<div style="font-size:0.72rem;color:rgba(255,255,255,0.42);'
             f'margin-top:8px;line-height:1.4;">'
@@ -988,6 +989,78 @@ with t2:
                 f'<span style="font-size:0.88rem;font-weight:700;color:{clr};">{val}</span>'
                 f'</div>'
             )
+
+        # ── trade plan section ─────────────────────────────────────────────
+        entry = r.get("entry") or r.get("price")
+        sl    = r.get("stop_loss")
+        tp1   = r.get("take_profit_1") or r.get("tp1")
+        tp2   = r.get("take_profit_2") or r.get("tp2")
+        tp3   = r.get("take_profit_3") or r.get("tp3")
+        rr1   = r.get("rr1", 1.5)
+        rr2   = r.get("rr2", 2.5)
+        rr3   = r.get("rr3", 4.0)
+        risk  = r.get("risk_per_share") or (abs(entry - sl) if entry and sl else None)
+        rpct  = r.get("risk_pct")
+        er    = r.get("entry_reason", "")
+        sr    = r.get("stop_reason", "")
+
+        entry_clr = "#00C805" if is_bull else "#F23645"
+        arrow     = "▲" if is_bull else "▼"
+
+        def tp_sc(lbl: str, val, rr, note: str) -> str:
+            val_str = f"${val:.2f}" if val else "—"
+            return (
+                f'<div style="display:flex;flex-direction:column;gap:2px;">'
+                f'<span style="font-size:0.56rem;color:rgba(255,255,255,0.28);'
+                f'letter-spacing:0.07em;text-transform:uppercase;">{lbl}</span>'
+                f'<span style="font-size:0.85rem;font-weight:700;color:#00C805;">{val_str}</span>'
+                f'<span style="font-size:0.55rem;color:rgba(255,255,255,0.25);">{note} · R:R 1:{rr}</span>'
+                f'</div>'
+            )
+
+        if entry and sl:
+            risk_str  = f"${risk:.2f} ({rpct:.1f}%)" if risk and rpct else (f"${risk:.2f}" if risk else "—")
+            er_short  = er[:38] if er else ""
+            sr_short  = sr[:38] if sr else ""
+
+            plan_row1 = (
+                '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:2px;">'
+                + f'<div style="display:flex;flex-direction:column;gap:2px;">'
+                  f'<span style="font-size:0.56rem;color:rgba(255,255,255,0.28);letter-spacing:0.07em;text-transform:uppercase;">Entry</span>'
+                  f'<span style="font-size:0.92rem;font-weight:800;color:{entry_clr};">${entry:.2f}</span>'
+                  + (f'<span style="font-size:0.55rem;color:rgba(255,255,255,0.25);">{er_short}</span>' if er_short else "")
+                  + '</div>'
+                + f'<div style="display:flex;flex-direction:column;gap:2px;">'
+                  f'<span style="font-size:0.56rem;color:rgba(255,255,255,0.28);letter-spacing:0.07em;text-transform:uppercase;">Stop Loss</span>'
+                  f'<span style="font-size:0.92rem;font-weight:800;color:#F23645;">${sl:.2f}</span>'
+                  + (f'<span style="font-size:0.55rem;color:rgba(255,255,255,0.25);">{sr_short}</span>' if sr_short else "")
+                  + '</div>'
+                + f'<div style="display:flex;flex-direction:column;gap:2px;">'
+                  f'<span style="font-size:0.56rem;color:rgba(255,255,255,0.28);letter-spacing:0.07em;text-transform:uppercase;">Risk/Share</span>'
+                  f'<span style="font-size:0.85rem;font-weight:700;color:#eab308;">{risk_str}</span>'
+                  f'</div>'
+                + '</div>'
+            )
+
+            plan_row2 = (
+                '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:8px;">'
+                + tp_sc("TP 1", tp1, rr1, "50% exit")
+                + tp_sc("TP 2", tp2, rr2, "30% exit")
+                + tp_sc("TP 3 runner", tp3, rr3, "20% exit")
+                + '</div>'
+            )
+
+            trade_plan_html = (
+                f'<div style="margin-top:10px;padding-top:10px;'
+                f'border-top:1px solid rgba(255,255,255,0.05);">'
+                f'<div style="font-size:0.58rem;font-weight:700;color:rgba(255,255,255,0.28);'
+                f'letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;">'
+                f'{arrow} Trade Plan</div>'
+                + plan_row1 + plan_row2 +
+                f'</div>'
+            )
+        else:
+            trade_plan_html = ""
 
         return (
             f'<div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);'
@@ -1010,6 +1083,7 @@ with t2:
             + sc("Score",  f'{r["final_score"]:.0f}/100',  "rgba(255,255,255,0.7)")
             + f'</div>'
             + cat_html
+            + trade_plan_html
             + f'<div style="margin-top:8px;">{_badges(r["signals"][:4])}</div>'
             + f'</div>'
         )
