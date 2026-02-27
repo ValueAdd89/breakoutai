@@ -1441,7 +1441,7 @@ with t4:
 
                     if res.get("entry") is not None:
                         st.markdown(
-                            _trade_plan_html(res),
+                            _trade_plan_html(res) + _option_play_html(res),
                             unsafe_allow_html=True,
                         )
 

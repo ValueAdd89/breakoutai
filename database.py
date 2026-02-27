@@ -59,15 +59,17 @@ def init_db() -> None:
         c.execute("CREATE INDEX IF NOT EXISTS idx_results_symbol ON scan_results(symbol)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_results_time   ON scan_results(scanned_at)")
 
-        # Evict persisted results that pre-date the entry/tp3/rr fields so
-        # stale rows don't suppress the new trade plan UI.
+        # Evict persisted results that are missing fields added in recent updates
+        # (entry/tp3/rr from trade plan, option_strategy from options play).
+        # This forces a fresh scan rather than showing stale incomplete cards.
+        _REQUIRED_FIELDS = {"entry", "take_profit_3", "option_strategy"}
         try:
             row = c.execute(
                 "SELECT payload FROM scan_results LIMIT 1"
             ).fetchone()
             if row:
                 sample = json.loads(row["payload"])
-                if "entry" not in sample or "take_profit_3" not in sample:
+                if not _REQUIRED_FIELDS.issubset(sample.keys()):
                     c.execute("DELETE FROM scan_results")
         except Exception:
             pass

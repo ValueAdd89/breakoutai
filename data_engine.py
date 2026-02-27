@@ -3,7 +3,9 @@ Data ingestion layer — synchronous, cache-backed.
 Works on Streamlit Cloud (no asyncio required).
 """
 import logging
-from datetime import datetime, timezone
+import math
+import calendar
+from datetime import datetime, timezone, date, timedelta
 from typing import Optional
 
 import httpx
@@ -388,7 +390,7 @@ def compute_option_play(
     bb_squeeze: bool,
     vol_ratio: float,
     rsi: float,
-    iv_estimate: float | None = None,
+    iv_estimate: Optional[float] = None,
 ) -> dict:
     """
     Recommend a concrete options play based on the signal setup.
@@ -399,45 +401,36 @@ def compute_option_play(
       strike        — float
       strike2       — float | None  (short leg for spreads)
       expiry_str    — "MM/DD" string
-      expiry_date   — datetime.date
+      expiry_date   — date ISO string
       rationale     — one-line reason
       max_profit    — "unlimited" | "$X.XX"
       max_loss      — "premium paid" | "$X.XX"
     """
-    from datetime import date, timedelta
-    import math
-
     today = date.today()
 
     # ── 1. Pick expiry date from bucket ───────────────────────────────────────
     def _next_friday(n_weeks: int = 0) -> date:
-        """Return the next Friday (+ n_weeks weeks)."""
-        days_ahead = 4 - today.weekday()  # 4 = Friday
+        days_ahead = 4 - today.weekday()   # 4 = Friday
         if days_ahead <= 0:
             days_ahead += 7
         return today + timedelta(days=days_ahead + n_weeks * 7)
 
     def _monthly_opex(month_offset: int = 0) -> date:
-        """3rd Friday of target month."""
-        import calendar
         year  = today.year + (today.month + month_offset - 1) // 12
         month = (today.month + month_offset - 1) % 12 + 1
-        c = calendar.monthcalendar(year, month)
-        fridays = [week[4] for week in c if week[4] != 0]
-        opex_day = fridays[2]  # 3rd Friday
-        return date(year, month, opex_day)
+        cal   = calendar.monthcalendar(year, month)
+        fridays = [week[4] for week in cal if week[4] != 0]
+        return date(year, month, fridays[2])   # 3rd Friday = monthly OPEX
 
-    bucket_map: dict[str, date] = {
-        "0dte":     today if today.weekday() < 5 else _next_friday(0),
-        "2dte":     _next_friday(0),
-        "weeklies": _next_friday(1),
+    bucket_map: dict = {
+        "0dte":      today if today.weekday() < 5 else _next_friday(0),
+        "2dte":      _next_friday(0),
+        "weeklies":  _next_friday(1),
         "monthlies": _monthly_opex(1),
-        "yearly":   _monthly_opex(3),
+        "yearly":    _monthly_opex(3),
     }
     expiry_date = bucket_map.get(expiry_bucket, _next_friday(1))
-    expiry_str  = expiry_date.strftime("%-m/%-d") if hasattr(expiry_date, "strftime") else expiry_date.strftime("%m/%d").lstrip("0")
-    # Windows-safe strftime (no %-m)
-    expiry_str = f"{expiry_date.month}/{expiry_date.day}"
+    expiry_str  = f"{expiry_date.month}/{expiry_date.day}"
 
     dte = (expiry_date - today).days
 
