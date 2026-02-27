@@ -329,31 +329,36 @@ def _dir_badge(d: str) -> str:
 def _trade_plan_html(r: dict) -> str:
     if r.get("stop_loss") is None or r.get("take_profit_1") is None:
         return ""
+
     def _tp_cell(label: str, val: str, color: str) -> str:
         return (
             f'<div style="display:flex;flex-direction:column;gap:2px;">'
-            f'  <div style="font-size:0.58rem;color:rgba(255,255,255,0.3);'
+            f'<div style="font-size:0.58rem;color:rgba(255,255,255,0.3);'
             f'letter-spacing:0.07em;text-transform:uppercase;">{label}</div>'
-            f'  <div style="font-size:0.85rem;font-weight:700;color:{color};">{val}</div>'
+            f'<div style="font-size:0.85rem;font-weight:700;color:{color};">{val}</div>'
             f'</div>'
         )
+
+    sl   = f"${r['stop_loss']:.2f}"
+    tp1  = f"${r['take_profit_1']:.2f}"
+    tp2  = f"${r['take_profit_2']:.2f}"
+    sup  = f"${r.get('support', 0):.0f}"
+    res  = f"${r.get('resistance', 0):.0f}"
+    rr   = f"1:{r.get('risk_reward', 2):.1f} · {r.get('position_pct', 2):.1f}%"
+    div  = '<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
+    divl = '<div style="padding:9px 11px;">'
+
     return (
-        f'<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:0;'
-        f'margin-top:12px;background:rgba(255,255,255,0.025);'
-        f'border:1px solid rgba(255,255,255,0.06);border-radius:10px;overflow:hidden;">'
-        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
-        f'{_tp_cell("Stop Loss", f"${r[\"stop_loss\"]:.2f}", "#F23645")}</div>'
-        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
-        f'{_tp_cell("TP 1", f"${r[\"take_profit_1\"]:.2f}", "#00C805")}</div>'
-        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
-        f'{_tp_cell("TP 2", f"${r[\"take_profit_2\"]:.2f}", "#00C805")}</div>'
-        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
-        f'{_tp_cell("Support", f"${r.get(\"support\",0):.0f}", "rgba(255,255,255,0.6)")}</div>'
-        f'<div style="padding:9px 11px;border-right:1px solid rgba(255,255,255,0.05);">'
-        f'{_tp_cell("Resistance", f"${r.get(\"resistance\",0):.0f}", "rgba(255,255,255,0.6)")}</div>'
-        f'<div style="padding:9px 11px;">'
-        f'{_tp_cell("R:R / Size", f"1:{r.get(\"risk_reward\",2):.1f} · {r.get(\"position_pct\",2):.1f}%", "rgba(255,255,255,0.6)")}</div>'
-        f'</div>'
+        '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:0;'
+        'margin-top:12px;background:rgba(255,255,255,0.025);'
+        'border:1px solid rgba(255,255,255,0.06);border-radius:10px;overflow:hidden;">'
+        + div  + _tp_cell("Stop Loss",  sl,  "#F23645")             + "</div>"
+        + div  + _tp_cell("TP 1",       tp1, "#00C805")              + "</div>"
+        + div  + _tp_cell("TP 2",       tp2, "#00C805")              + "</div>"
+        + div  + _tp_cell("Support",    sup, "rgba(255,255,255,0.6)") + "</div>"
+        + div  + _tp_cell("Resistance", res, "rgba(255,255,255,0.6)") + "</div>"
+        + divl + _tp_cell("R:R / Size", rr,  "rgba(255,255,255,0.6)") + "</div>"
+        + "</div>"
     )
 
 def _stat_cell(label: str, value: str, color: str = "#fff") -> str:
