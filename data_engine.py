@@ -40,6 +40,8 @@ def _news_ttl() -> int:
 
 _price_cache: TTLCache = TTLCache(maxsize=500, ttl=_price_ttl())
 _news_cache:  TTLCache = TTLCache(maxsize=200, ttl=_news_ttl())
+_flow_cache:  TTLCache = TTLCache(maxsize=300, ttl=600)    # 10 min for options flow
+_social_cache: TTLCache = TTLCache(maxsize=300, ttl=900)   # 15 min for social sentiment
 
 COMPANY_NAMES: dict[str, str] = {
     "AAPL": "Apple Inc.",        "MSFT": "Microsoft Corp.",    "GOOGL": "Alphabet Inc.",
@@ -112,12 +114,164 @@ def _sentiment(text: str) -> tuple[float, str]:
         return 0.0, "neutral"
 
 
+# ── Geopolitical / macro / rumor keywords for news categorization ──────────────
+_GEO_KEYWORDS = frozenset({
+    "war", "military", "sanctions", "tariff", "trade war", "china", "russia",
+    "iran", "ukraine", "taiwan", "nato", "oil", "opec", "inflation", "recession",
+    "fed", "rate cut", "rate hike", "election", "congress", "white house",
+    "geopolitical", "regulatory", "sec", "doj", "antitrust", "lawsuit",
+    "ban", "embargo", "nuclear", "military strike", "border", "immigration",
+})
+_RUMOR_KEYWORDS = frozenset({
+    "rumor", "rumour", "reportedly", "sources say", "insiders", "leak",
+    "speculation", "hearing", "chatter", "buzz", "could", "might", "may",
+    "exploring", "considering", "in talks", "merger talks", "buyout",
+})
+
+
+def _categorize_news(title: str, desc: str = "") -> list[str]:
+    """Return tags like ['geopolitical'], ['rumor'], or [] for a news item."""
+    text = (title + " " + (desc or "")).lower()
+    tags = []
+    if any(kw in text for kw in _GEO_KEYWORDS):
+        tags.append("geopolitical")
+    if any(kw in text for kw in _RUMOR_KEYWORDS):
+        tags.append("rumor")
+    return tags
+
+
+def fetch_options_flow(symbol: str) -> Optional[dict]:
+    """
+    Fetch options call vs put flow from yfinance (free, no API key).
+    Uses volume × lastPrice as a premium proxy from the live options chain.
+    Returns {call_premium, put_premium, net_call_put, bias} or None.
+    Bias: 'bullish' if net calls > puts, 'bearish' if net puts > calls, else 'neutral'.
+    """
+    key = f"flow_{symbol}"
+    if key in _flow_cache:
+        return _flow_cache[key]
+    try:
+        ticker = yf.Ticker(symbol)
+        raw_opts = ticker.options or ()
+        if not raw_opts:
+            return None
+        tot_call, tot_put = 0.0, 0.0
+        for exp_str in list(raw_opts)[:2]:
+            try:
+                chain = ticker.option_chain(exp_str)
+            except Exception:
+                continue
+            for df, is_call in [(chain.calls, True), (chain.puts, False)]:
+                if df is None or df.empty:
+                    continue
+                cols_lower = {str(c).lower(): c for c in df.columns if c is not None}
+                vol_col = cols_lower.get("volume")
+                price_col = cols_lower.get("lastprice") or cols_lower.get("last")
+                if vol_col is None:
+                    continue
+                vol = df[vol_col].fillna(0)
+                if price_col is not None:
+                    price = df[price_col].fillna(0)
+                    premium = (vol * price * 100).sum()  # 100 shares per contract
+                else:
+                    premium = float(vol.sum()) * 100  # rough proxy
+                if is_call:
+                    tot_call += premium
+                else:
+                    tot_put += premium
+        if tot_call == 0 and tot_put == 0:
+            return None
+        net = tot_call - tot_put
+        bias = "bullish" if net > 0 else "bearish" if net < 0 else "neutral"
+        out = {
+            "call_premium": round(tot_call, 2),
+            "put_premium":  round(tot_put, 2),
+            "net_call_put": round(net, 2),
+            "bias":         bias,
+        }
+        _flow_cache[key] = out
+        return out
+    except Exception as e:
+        logger.debug(f"Options flow error {symbol}: {e}")
+        return None
+
+
+def fetch_social_sentiment(symbol: str) -> Optional[dict]:
+    """
+    Fetch Reddit/StockTwits sentiment from Finnhub (when key configured).
+    Returns {reddit_sentiment, stocktwits_sentiment, overall, buzz} or None.
+    Used as a proxy for rumors/chatter.
+    """
+    if not config.FINNHUB_KEY:
+        return None
+    key = f"social_{symbol}"
+    if key in _social_cache:
+        return _social_cache[key]
+    try:
+        to_dt = date.today()
+        from_dt = to_dt - timedelta(days=7)
+        with httpx.Client(timeout=8) as client:
+            resp = client.get(
+                "https://finnhub.io/api/v1/stock/social-sentiment",
+                params={
+                    "symbol": symbol,
+                    "from": from_dt.isoformat(),
+                    "to": to_dt.isoformat(),
+                    "token": config.FINNHUB_KEY,
+                },
+            )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        reddit = data.get("reddit") or []
+        twits = data.get("stockTwits") or []
+        if not isinstance(reddit, list):
+            reddit = [reddit] if reddit else []
+        if not isinstance(twits, list):
+            twits = [twits] if twits else []
+
+        def _agg(entries: list) -> tuple:
+            mentions = sum(int(e.get("mention", 0) or 0) for e in entries if isinstance(e, dict))
+            pos = sum(float(e.get("positiveScore", 0) or 0) for e in entries if isinstance(e, dict))
+            neg = sum(float(e.get("negativeScore", 0) or 0) for e in entries if isinstance(e, dict))
+            n = len(entries) or 1
+            sent = (pos - neg) / n if n else 0.5
+            return mentions, max(0, min(1, 0.5 + sent))
+
+        rb, rr = _agg(reddit)
+        tb, rt = _agg(twits)
+        overall = (rr + rt) / 2.0 if (rr or rt) else 0.5
+        buzz = rb + tb
+        out = {
+            "reddit_sentiment": round(rr, 3),
+            "stocktwits_sentiment": round(rt, 3),
+            "overall": round(overall, 3),
+            "buzz": buzz,
+            "buzz_label": "high" if buzz > 500 else "medium" if buzz > 100 else "low",
+        }
+        _social_cache[key] = out
+        return out
+    except Exception as e:
+        logger.debug(f"Finnhub social sentiment error {symbol}: {e}")
+        return None
+
+
 def fetch_news(symbol: str) -> list[dict]:
     key = f"news_{symbol}"
     if key in _news_cache:
         return _news_cache[key]
 
     items: list[dict] = []
+
+    def _add_item(title: str, source: str, url: str, published: str, desc: str = ""):
+        score, label = _sentiment(title + " " + desc)
+        tags = _categorize_news(title, desc)
+        items.append({
+            "title": title, "source": source, "url": url,
+            "published_at": published, "description": desc,
+            "sentiment": score, "sentiment_label": label,
+            "tags": tags,
+        })
 
     # Yahoo Finance RSS — free, no key needed
     rss = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={symbol}&region=US&lang=en-US"
@@ -127,13 +281,8 @@ def fetch_news(symbol: str) -> list[dict]:
             if resp.status_code == 200:
                 for entry in feedparser.parse(resp.text).entries[:10]:
                     title = entry.get("title", "")
-                    score, label = _sentiment(title)
-                    items.append({
-                        "title": title, "source": "Yahoo Finance",
-                        "url": entry.get("link", ""),
-                        "published_at": entry.get("published", ""),
-                        "sentiment": score, "sentiment_label": label,
-                    })
+                    _add_item(title, "Yahoo Finance", entry.get("link", ""),
+                              entry.get("published", ""), entry.get("summary", ""))
     except Exception as e:
         logger.debug(f"RSS error {symbol}: {e}")
 
@@ -149,14 +298,9 @@ def fetch_news(symbol: str) -> list[dict]:
                 if resp.status_code == 200:
                     for a in resp.json().get("articles", []):
                         title = a.get("title") or ""
-                        score, label = _sentiment(title + " " + (a.get("description") or ""))
-                        items.append({
-                            "title": title,
-                            "source": a.get("source", {}).get("name", ""),
-                            "url": a.get("url", ""),
-                            "published_at": a.get("publishedAt", ""),
-                            "sentiment": score, "sentiment_label": label,
-                        })
+                        desc = a.get("description") or ""
+                        _add_item(title, a.get("source", {}).get("name", ""),
+                                  a.get("url", ""), a.get("publishedAt", ""), desc)
         except Exception as e:
             logger.debug(f"NewsAPI error {symbol}: {e}")
 
@@ -377,7 +521,8 @@ def compute_entry_exit(
     }
 
 
-_expiry_cache: TTLCache = TTLCache(maxsize=300, ttl=3_600)   # 1-hour cache per symbol
+_expiry_cache:  TTLCache = TTLCache(maxsize=300, ttl=3_600)   # 1-hour cache per symbol
+_strikes_cache: TTLCache = TTLCache(maxsize=300, ttl=3_600)   # strikes per symbol+expiry
 
 
 def get_option_expiries(symbol: str) -> list:
@@ -401,6 +546,45 @@ def get_option_expiries(symbol: str) -> list:
         logger.debug(f"Option expiries fetch failed for {symbol}: {e}")
         _expiry_cache[key] = []
         return []
+
+
+def get_real_strikes(symbol: str, expiry_date: date) -> dict:
+    """
+    Fetch real call and put strikes from the live options chain for a specific expiry.
+    Returns {"calls": [float, ...], "puts": [float, ...]} sorted ascending.
+    Cached for 1 hour.  Returns empty lists on failure.
+    """
+    expiry_str = expiry_date.isoformat()
+    key = f"strikes_{symbol}_{expiry_str}"
+    if key in _strikes_cache:
+        return _strikes_cache[key]
+    try:
+        chain = yf.Ticker(symbol).option_chain(expiry_str)
+        calls = sorted(float(s) for s in chain.calls["strike"].dropna().tolist())
+        puts  = sorted(float(s) for s in chain.puts["strike"].dropna().tolist())
+        result = {"calls": calls, "puts": puts}
+    except Exception as e:
+        logger.debug(f"Strike fetch failed for {symbol} {expiry_str}: {e}")
+        result = {"calls": [], "puts": []}
+    _strikes_cache[key] = result
+    return result
+
+
+def _nearest_strike(ideal: float, strikes: list, direction: str = "nearest") -> Optional[float]:
+    """
+    Snap an ideal price to the nearest available strike.
+    direction: "nearest" | "above" | "below"
+    """
+    if not strikes:
+        return None
+    if direction == "above":
+        above = [s for s in strikes if s >= ideal]
+        return above[0] if above else strikes[-1]
+    if direction == "below":
+        below = [s for s in strikes if s <= ideal]
+        return below[-1] if below else strikes[0]
+    # nearest
+    return min(strikes, key=lambda s: abs(s - ideal))
 
 
 def _pick_expiry_from_chain(
@@ -445,6 +629,15 @@ def _pick_expiry_from_chain(
     return expiries[0]
 
 
+def _generic_round(px: float) -> float:
+    """Generic strike rounding used only when the live chain is unavailable."""
+    if px < 5:     inc = 0.50
+    elif px < 50:  inc = 1.0
+    elif px < 200: inc = 5.0
+    else:          inc = 10.0
+    return round(round(px / inc) * inc, 2)
+
+
 def compute_option_play(
     direction: str,
     expiry_bucket: str,
@@ -460,6 +653,7 @@ def compute_option_play(
     rsi: float,
     symbol: str = "",
     iv_estimate: Optional[float] = None,
+    flow_bias: Optional[str] = None,
 ) -> dict:
     """
     Recommend a concrete options play based on the signal setup.
@@ -509,14 +703,24 @@ def compute_option_play(
     expiry_str = f"{expiry_date.month}/{expiry_date.day}"
     dte = (expiry_date - today).days
 
-    # ── 2. Round strike to nearest standard increment ──────────────────────────
-    def _round_strike(px: float) -> float:
-        if px < 5:    inc = 0.50
-        elif px < 20:  inc = 1.0
-        elif px < 50:  inc = 1.0
-        elif px < 200: inc = 5.0
-        else:          inc = 10.0
-        return round(round(px / inc) * inc, 2)
+    # ── 2. Fetch real strikes for this expiry; build a snap helper ─────────────
+    real_chain  = get_real_strikes(symbol, expiry_date) if symbol else {"calls": [], "puts": []}
+    call_strikes = real_chain["calls"]
+    put_strikes  = real_chain["puts"]
+
+    def _snap_call(ideal: float, prefer: str = "above") -> float:
+        """Return nearest real call strike; fall back to generic rounding."""
+        real = _nearest_strike(ideal, call_strikes, prefer)
+        if real is not None:
+            return real
+        return _generic_round(ideal)
+
+    def _snap_put(ideal: float, prefer: str = "below") -> float:
+        """Return nearest real put strike; fall back to generic rounding."""
+        real = _nearest_strike(ideal, put_strikes, prefer)
+        if real is not None:
+            return real
+        return _generic_round(ideal)
 
     # ── 3. Determine IV context (simple heuristic if not provided) ─────────────
     if iv_estimate is None:
@@ -548,76 +752,103 @@ def compute_option_play(
     else:
         strategy = "Long Put" if not high_iv else "Put Debit Spread"
 
-    # ── 5. Set strikes ────────────────────────────────────────────────────────
-    if strategy in ("Long Call", "Long Put"):
-        # Slightly OTM (better leverage, defined risk)
-        otm_buffer = atr * 0.25
-        if strategy == "Long Call":
-            strike  = _round_strike(entry + otm_buffer)
-        else:
-            strike  = _round_strike(entry - otm_buffer)
+    # ── 5. Set strikes — snapped to real chain strikes where available ───────────
+    otm_buffer = atr * 0.25
+
+    if strategy == "Long Call":
+        # Slightly OTM call: snap to nearest call strike at or above ideal
+        ideal   = entry + otm_buffer
+        strike  = _snap_call(ideal, prefer="above")
         strike2 = None
-
-        suffix = "c" if strategy == "Long Call" else "p"
-        contract = f"{expiry_str} ${strike:.0f}{suffix}"
-        max_profit = "Unlimited" if strategy == "Long Call" else f"~${abs(strike - 0):.0f} (stock → 0)"
+        contract   = f"{expiry_str} ${strike:.2f}c".replace(".00c", "c")
+        max_profit = "Unlimited"
         max_loss   = "Premium paid"
+        target_move = round(tp1 - entry, 2)
+        rationale = (
+            f"OTM call on bullish breakout. Entry ${entry:.2f} → TP1 ${tp1:.2f} "
+            f"(+${target_move:.2f}). Expires {expiry_str}."
+        )
 
-        # Rationale
-        if strategy == "Long Call":
-            target_move = round(tp1 - entry, 2)
-            rationale = (
-                f"OTM call on bullish breakout. Entry ${entry:.2f} → TP1 ${tp1:.2f} "
-                f"(+${target_move:.2f}). Expires {expiry_str}."
-            )
-        else:
-            target_move = round(entry - tp1, 2)
-            rationale = (
-                f"OTM put on bearish breakdown. Entry ${entry:.2f} → TP1 ${tp1:.2f} "
-                f"(−${target_move:.2f}). Expires {expiry_str}."
-            )
+    elif strategy == "Long Put":
+        # Slightly OTM put: snap to nearest put strike at or below ideal
+        ideal   = entry - otm_buffer
+        strike  = _snap_put(ideal, prefer="below")
+        strike2 = None
+        contract   = f"{expiry_str} ${strike:.2f}p".replace(".00p", "p")
+        max_profit = f"~${strike:.0f} max (stock → $0)"
+        max_loss   = "Premium paid"
+        target_move = round(entry - tp1, 2)
+        rationale = (
+            f"OTM put on bearish breakdown. Entry ${entry:.2f} → TP1 ${tp1:.2f} "
+            f"(−${target_move:.2f}). Expires {expiry_str}."
+        )
 
-    elif strategy in ("Call Debit Spread", "Put Debit Spread"):
-        otm_buffer = atr * 0.20
-        spread_width = _round_strike(abs(tp1 - entry) * 0.6)  # short leg near TP1
-        spread_width = max(spread_width, 2.5 if price < 50 else 5.0)
-
-        if strategy == "Call Debit Spread":
-            strike  = _round_strike(entry + otm_buffer)
-            strike2 = _round_strike(strike + spread_width)
-            suffix  = "c"
-        else:
-            strike  = _round_strike(entry - otm_buffer)
-            strike2 = _round_strike(strike - spread_width)
-            suffix  = "p"
-
-        contract   = f"{expiry_str} ${strike:.0f}/{strike2:.0f}{suffix}s"
-        max_profit = f"${abs(strike2 - strike):.2f} − premium"
+    elif strategy == "Call Debit Spread":
+        # Long leg slightly OTM, short leg near TP1
+        ideal_long  = entry + atr * 0.20
+        ideal_short = tp1
+        strike  = _snap_call(ideal_long,  prefer="above")
+        strike2 = _snap_call(ideal_short, prefer="above")
+        if strike2 <= strike:          # ensure spread has positive width
+            # move short leg one strike higher
+            above_long = [s for s in call_strikes if s > strike]
+            strike2 = above_long[0] if above_long else strike + _generic_round(price * 0.025)
+        width      = round(abs(strike2 - strike), 2)
+        contract   = f"{expiry_str} ${strike:.2f}/${strike2:.2f}c".replace(".00c", "c").replace(".00/", "/")
+        max_profit = f"${width:.2f} − debit"
         max_loss   = "Net debit paid"
         rationale  = (
-            f"{'Bull' if is_bull else 'Bear'} debit spread — caps cost in high-IV environment. "
-            f"Long ${strike:.0f} / Short ${strike2:.0f}. Expires {expiry_str}."
+            f"Bull call spread — defined risk in high-IV environment. "
+            f"Long ${strike:.2f} / Short ${strike2:.2f}. Expires {expiry_str}."
+        )
+
+    elif strategy == "Put Debit Spread":
+        ideal_long  = entry - atr * 0.20
+        ideal_short = tp1
+        strike  = _snap_put(ideal_long,  prefer="below")
+        strike2 = _snap_put(ideal_short, prefer="below")
+        if strike2 >= strike:          # ensure spread has positive width
+            below_long = [s for s in put_strikes if s < strike]
+            strike2 = below_long[-1] if below_long else strike - _generic_round(price * 0.025)
+        width      = round(abs(strike - strike2), 2)
+        contract   = f"{expiry_str} ${strike:.2f}/${strike2:.2f}p".replace(".00p", "p").replace(".00/", "/")
+        max_profit = f"${width:.2f} − debit"
+        max_loss   = "Net debit paid"
+        rationale  = (
+            f"Bear put spread — defined risk in high-IV environment. "
+            f"Long ${strike:.2f} / Short ${strike2:.2f}. Expires {expiry_str}."
         )
 
     elif strategy == "Straddle":
-        strike  = _round_strike(price)   # ATM
-        strike2 = strike                  # same strike, both legs
-        contract   = f"{expiry_str} ${strike:.0f} straddle"
+        # ATM: snap call strike nearest to current price (put chain is same strike)
+        ideal   = price
+        strike  = _snap_call(ideal, prefer="nearest")
+        strike2 = _nearest_strike(ideal, put_strikes, "nearest") or strike
+        contract   = f"{expiry_str} ${strike:.2f} straddle".replace(".00 straddle", " straddle")
         max_profit = "Unlimited"
         max_loss   = "Net debit (both premiums)"
         rationale  = (
-            f"BB squeeze + volume surge — big move expected but direction uncertain. "
-            f"ATM straddle at ${strike:.0f}. Expires {expiry_str}."
+            f"BB squeeze + volume surge — big move expected. "
+            f"ATM straddle at ${strike:.2f}. Expires {expiry_str}."
         )
+
     else:
-        # Fallback
-        strike  = _round_strike(entry)
+        # Generic fallback
+        strike  = _snap_call(entry, prefer="nearest") if is_bull else _snap_put(entry, prefer="nearest")
         strike2 = None
         suffix  = "c" if is_bull else "p"
-        contract   = f"{expiry_str} ${strike:.0f}{suffix}"
+        contract   = f"{expiry_str} ${strike:.2f}{suffix}".replace(f".00{suffix}", suffix)
         max_profit = "Unlimited"
         max_loss   = "Premium paid"
         rationale  = f"Directional play on {direction} signal."
+
+    # Append options flow note when available
+    if flow_bias and flow_bias != "neutral":
+        flow_confirms = (is_bull and flow_bias == "bullish") or (not is_bull and flow_bias == "bearish")
+        if flow_confirms:
+            rationale += " Options flow confirms."
+        else:
+            rationale += " Options flow opposes — caution."
 
     return {
         "strategy":    strategy,

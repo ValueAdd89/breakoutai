@@ -18,6 +18,8 @@ setups and **email you automatically** when confidence ≥ 95%.
 | **Email Alerts** | HTML email sent automatically when confidence ≥ threshold |
 | **Technical Signals** | RSI, MACD, Bollinger Squeeze, Volume Surge, 52-week high, Golden/Death Cross |
 | **News Sentiment** | Yahoo Finance RSS + optional NewsAPI (TextBlob NLP) |
+| **Geopolitical / Rumors** | News tagged by geo/macro keywords; rumor detection; Finnhub social sentiment |
+| **Options Flow** | Call vs put volume from yfinance (free) to inform options plays and bias |
 | **Candlestick Charts** | Plotly charts with SMA 20/50 overlay and signal annotations |
 | **Alert History** | SQLite log with CSV export |
 | **Watchlist** | Add/remove symbols any time from the UI |
@@ -67,7 +69,7 @@ ALERT_EMAIL_TO       = "you@gmail.com"
 
 # Optional enrichment (free API keys)
 NEWS_API_KEY = ""     # https://newsapi.org/register
-FINNHUB_KEY  = ""     # https://finnhub.io/
+FINNHUB_KEY  = ""     # https://finnhub.io/ — social sentiment, rumors proxy
 
 # Tuning (these have sensible defaults)
 SCAN_INTERVAL_MINUTES = "15"

@@ -25,7 +25,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import config
 import database as db
 from universe import get_screened_candidates, get_universe_names
-from data_engine import get_price_data, get_quote, fetch_news, compute_sentiment_score, compute_indicators, compute_entry_exit, compute_option_play
+from data_engine import (
+    get_price_data, get_quote, fetch_news, compute_sentiment_score, compute_indicators,
+    compute_entry_exit, compute_option_play,
+    fetch_options_flow, fetch_social_sentiment,
+)
 from ml_model import get_confidence
 from alerts import send_alert_email
 
@@ -244,6 +248,29 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             if neg_news:
                 catalysts.append(f'Negative: "{neg_news[0]["title"][:55]}"')
 
+        # Geopolitical & rumor news — always surface when present
+        geo_news = [n for n in news if "geopolitical" in n.get("tags", [])]
+        rumor_news = [n for n in news if "rumor" in n.get("tags", [])]
+        for n in geo_news[:2]:
+            catalysts.append(f'🌍 Geo: "{n["title"][:55]}"')
+        for n in rumor_news[:2]:
+            catalysts.append(f'💬 Rumor: "{n["title"][:55]}"')
+
+        # Options flow (yfinance) + Finnhub social sentiment (rumors/chatter)
+        unusual_flow = fetch_options_flow(symbol)
+        social_sent = fetch_social_sentiment(symbol)
+        flow_bias = unusual_flow["bias"] if unusual_flow else None
+        if unusual_flow and unusual_flow.get("net_call_put"):
+            net = unusual_flow["net_call_put"]
+            direction_label = "call" if net > 0 else "put"
+            catalysts.append(
+                f"📈 Options flow: ${abs(net):,.0f} net {direction_label} premium"
+            )
+        if social_sent and social_sent.get("buzz", 0) > 100:
+            catalysts.append(
+                f"📊 Social buzz: {social_sent['buzz_label']} ({social_sent['buzz']} mentions)"
+            )
+
         price = quote.get("price", 0.0)
         atr   = ind["atr"] or (price * 0.02)
 
@@ -259,6 +286,7 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
         )
 
         # Concrete options play recommendation — uses real expiry chain from yfinance
+        # flow_bias from options flow can nudge strategy when smart money aligns
         option_play = compute_option_play(
             direction=direction,
             expiry_bucket=expiry_signal,
@@ -273,6 +301,7 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             vol_ratio=ind["vol_ratio"],
             rsi=ind["rsi"],
             symbol=symbol,
+            flow_bias=flow_bias,
         )
 
         return {
@@ -331,6 +360,11 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             "option_max_profit": option_play["max_profit"],
             "option_max_loss":  option_play["max_loss"],
             "iv_estimate":     option_play["iv_estimate"],
+            # ── Alternative data (options flow, social, geo, rumors) ──
+            "unusual_flow":    unusual_flow,
+            "social_sentiment": social_sent,
+            "geo_news":        geo_news[:3],
+            "rumor_news":      rumor_news[:3],
         }
     except Exception as e:
         logger.debug(f"Analysis failed for {symbol}: {e}")

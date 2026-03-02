@@ -498,6 +498,56 @@ def _option_play_html(r: dict) -> str:
     )
 
 
+def _alt_data_html(r: dict) -> str:
+    """Render Options flow, Social/Rumors, and Geopolitical when present."""
+    parts = []
+    flow = r.get("unusual_flow")
+    if flow and flow.get("net_call_put") is not None:
+        net = flow["net_call_put"]
+        bias = flow.get("bias", "neutral")
+        bias_col = "#00C805" if bias == "bullish" else "#F23645" if bias == "bearish" else "#888"
+        parts.append(
+            f'<div style="display:flex;align-items:center;gap:6px;">'
+            f'<span style="font-size:0.6rem;color:rgba(255,255,255,0.3);text-transform:uppercase;">📈 Flow</span>'
+            f'<span style="font-size:0.8rem;font-weight:700;color:{bias_col};">'
+            f'${net:,.0f} net {"calls" if net > 0 else "puts"}</span></div>'
+        )
+    social = r.get("social_sentiment")
+    if social and social.get("buzz", 0) > 50:
+        buzz = social["buzz"]
+        overall = social.get("overall", 0.5)
+        sent_col = "#00C805" if overall > 0.55 else "#F23645" if overall < 0.45 else "#eab308"
+        parts.append(
+            f'<div style="display:flex;align-items:center;gap:6px;">'
+            f'<span style="font-size:0.6rem;color:rgba(255,255,255,0.3);text-transform:uppercase;">📊 Social</span>'
+            f'<span style="font-size:0.8rem;font-weight:700;color:{sent_col};">'
+            f'{buzz} mentions · {overall*100:.0f}% bullish</span></div>'
+        )
+    geo = r.get("geo_news") or []
+    rumor = r.get("rumor_news") or []
+    if geo or rumor:
+        items = []
+        for n in geo[:1]:
+            items.append(f'🌍 {n["title"][:50]}…')
+        for n in rumor[:1]:
+            items.append(f'💬 {n["title"][:50]}…')
+        if items:
+            parts.append(
+                '<div style="font-size:0.68rem;color:rgba(255,255,255,0.4);line-height:1.4;">'
+                + " | ".join(items) + '</div>'
+            )
+    if not parts:
+        return ""
+    return (
+        '<div style="margin-top:10px;padding:10px 12px;background:rgba(255,255,255,0.02);'
+        'border:1px solid rgba(255,255,255,0.06);border-radius:8px;">'
+        '<div style="font-size:0.58rem;color:rgba(255,255,255,0.28);letter-spacing:0.08em;'
+        'text-transform:uppercase;margin-bottom:8px;">Flow · Rumors · Geo</div>'
+        + "".join(parts) +
+        '</div>'
+    )
+
+
 def _conf_bar(confidence: float, color: str) -> str:
     pct = min(100, confidence)
     return (
@@ -524,7 +574,7 @@ def _breakout_card_html(r: dict) -> str:
         f'<div style="font-size:0.73rem;color:rgba(255,255,255,0.5);'
         f'display:flex;align-items:flex-start;gap:5px;margin-top:4px;">'
         f'<span style="color:{col};margin-top:1px;">▸</span>{c}</div>'
-        for c in r["catalysts"][:3]
+        for c in r["catalysts"][:6]
     )
     cats_section = (
         f'<div style="margin-top:10px;padding-top:10px;'
@@ -533,6 +583,9 @@ def _breakout_card_html(r: dict) -> str:
         f'letter-spacing:0.07em;text-transform:uppercase;margin-bottom:4px;">{cat_label}</div>'
         + cats_html + '</div>'
     ) if r["catalysts"] else ""
+
+    # Alternative data panel: Options flow, Social/Rumors, Geopolitical
+    alt_html = _alt_data_html(r)
 
     sep = '<div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">'
 
@@ -568,6 +621,7 @@ def _breakout_card_html(r: dict) -> str:
 
         + _trade_plan_html(r)
         + _option_play_html(r)
+        + alt_html
         + f'<div style="margin-top:10px;">{_badges(r["signals"])}</div>'
         + cats_section
         + f'</div>'
@@ -1166,6 +1220,7 @@ with t2:
             + cat_html
             + trade_plan_html
             + _option_play_html(r)
+            + _alt_data_html(r)
             + f'<div style="margin-top:8px;">{_badges(r["signals"][:4])}</div>'
             + f'</div>'
         )
@@ -1502,7 +1557,8 @@ with t4:
 
                     if res.get("entry") is not None:
                         st.markdown(
-                            _trade_plan_html(res) + _option_play_html(res),
+                            _trade_plan_html(res) + _option_play_html(res)
+                            + _alt_data_html(res),
                             unsafe_allow_html=True,
                         )
 

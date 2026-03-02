@@ -35,7 +35,7 @@ SMTP_PORT: int            = int(_get("SMTP_PORT", "587"))
 
 # ── APIs ──────────────────────────────────────────────────────────────────────
 NEWS_API_KEY: str = _get("NEWS_API_KEY")
-FINNHUB_KEY: str  = _get("FINNHUB_KEY")
+FINNHUB_KEY: str = _get("FINNHUB_KEY")
 
 # ── Scanner behaviour ─────────────────────────────────────────────────────────
 # How often (minutes) to re-run the full-market scan

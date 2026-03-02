@@ -62,7 +62,7 @@ def init_db() -> None:
         # Evict persisted results that are missing fields added in recent updates
         # (entry/tp3/rr from trade plan, option_strategy from options play).
         # This forces a fresh scan rather than showing stale incomplete cards.
-        _REQUIRED_FIELDS = {"entry", "take_profit_3", "option_strategy"}
+        _REQUIRED_FIELDS = {"entry", "take_profit_3", "option_strategy", "option_contract"}
         try:
             row = c.execute(
                 "SELECT payload FROM scan_results LIMIT 1"
