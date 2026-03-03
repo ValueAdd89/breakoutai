@@ -414,7 +414,7 @@ def _stat_cell(label: str, value: str, color: str = "#fff") -> str:
 
 
 def _option_play_html(r: dict) -> str:
-    """Render a compact option play recommendation chip + detail row."""
+    """Render a compact option play recommendation chip + detail rows."""
     strategy = r.get("option_strategy")
     contract = r.get("option_contract")
     if not strategy or not contract:
@@ -426,12 +426,12 @@ def _option_play_html(r: dict) -> str:
     max_loss   = r.get("option_max_loss", "—")
     iv_est     = r.get("iv_estimate")
     iv_str     = f"{iv_est:.0f}%" if iv_est else "—"
-    expiry_iso = r.get("option_expiry", "")
+    contract_iv = r.get("contract_iv")
+    if contract_iv is not None:
+        iv_str = f"{contract_iv:.0f}%"
 
-    # Build a friendly expiry label: "3/14 (7 DTE)" or "3/14 · live chain"
     if isinstance(dte, int) and dte >= 0:
         dte_label = f"{dte} DTE"
-        # Mark as live-chain date if we fetched it from yfinance options
         chain_badge = (
             '<span style="font-size:0.55rem;background:rgba(0,200,5,0.12);'
             'border:1px solid rgba(0,200,5,0.3);color:#00C805;padding:1px 6px;'
@@ -441,7 +441,6 @@ def _option_play_html(r: dict) -> str:
         dte_label   = ""
         chain_badge = ""
 
-    # Color coding per strategy
     strat_colors: dict = {
         "Long Call":         "#00C805",
         "Long Put":          "#F23645",
@@ -450,6 +449,60 @@ def _option_play_html(r: dict) -> str:
         "Straddle":          "#eab308",
     }
     chip_color = strat_colors.get(strategy, "#fff")
+
+    # Trader-focused details: expected move, option BE, premium, liquidity, warnings
+    exp_move = r.get("expected_move")
+    opt_be   = r.get("option_breakeven")
+    premium  = r.get("option_premium")
+    cvol     = r.get("contract_volume")
+    coi      = r.get("contract_oi")
+    earn_w   = r.get("earnings_warning", "")
+    exdiv_w  = r.get("ex_div_warning", "")
+
+    detail_cells = []
+    if exp_move is not None:
+        detail_cells.append(
+            f'<div style="padding:6px 8px;border-right:1px solid rgba(255,255,255,0.05);">'
+            f'<div style="font-size:0.52rem;color:rgba(255,255,255,0.25);text-transform:uppercase;">Expected move (1σ)</div>'
+            f'<div style="font-size:0.75rem;font-weight:700;color:rgba(255,255,255,0.85);">±${exp_move:.2f}</div></div>'
+        )
+    if opt_be is not None:
+        detail_cells.append(
+            f'<div style="padding:6px 8px;border-right:1px solid rgba(255,255,255,0.05);">'
+            f'<div style="font-size:0.52rem;color:rgba(255,255,255,0.25);text-transform:uppercase;">Option BE</div>'
+            f'<div style="font-size:0.75rem;font-weight:700;color:#0a84ff;">${opt_be:.2f}</div></div>'
+        )
+    if premium is not None:
+        detail_cells.append(
+            f'<div style="padding:6px 8px;border-right:1px solid rgba(255,255,255,0.05);">'
+            f'<div style="font-size:0.52rem;color:rgba(255,255,255,0.25);text-transform:uppercase;">Premium</div>'
+            f'<div style="font-size:0.75rem;font-weight:700;">${premium:.2f}</div></div>'
+        )
+    if (cvol is not None and cvol >= 0) or (coi is not None and coi >= 0):
+        liq = []
+        if cvol is not None: liq.append(f"Vol {cvol:,}")
+        if coi is not None:  liq.append(f"OI {coi:,}")
+        detail_cells.append(
+            '<div style="padding:6px 8px;">'
+            '<div style="font-size:0.52rem;color:rgba(255,255,255,0.25);text-transform:uppercase;">Liquidity</div>'
+            f'<div style="font-size:0.75rem;font-weight:700;">{" · ".join(liq)}</div></div>'
+        )
+    details_row = ""
+    if detail_cells:
+        details_row = (
+            '<div style="display:grid;grid-template-columns:repeat(' + str(len(detail_cells)) + ',1fr);gap:0;'
+            'background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.04);'
+            'border-top:none;border-radius:0 0 8px 8px;overflow:hidden;">'
+            + "".join(detail_cells) + "</div>"
+        )
+    warnings_html = ""
+    if earn_w or exdiv_w:
+        warns = [w for w in [earn_w, exdiv_w] if w]
+        warnings_html = (
+            '<div style="margin-top:6px;padding:6px 8px;background:rgba(234,179,8,0.08);'
+            'border:1px solid rgba(234,179,8,0.2);border-radius:6px;font-size:0.65rem;'
+            'color:#eab308;">⚠ ' + " | ".join(warns) + "</div>"
+        )
 
     return (
         '<div style="margin-top:12px;padding-top:12px;'
@@ -469,7 +522,7 @@ def _option_play_html(r: dict) -> str:
 
         '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;'
         'background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.05);'
-        'border-radius:8px;overflow:hidden;">'
+        'border-radius:8px 8px 0 0;overflow:hidden;">'
 
         '<div style="padding:8px 10px;border-right:1px solid rgba(255,255,255,0.05);">'
         '<div style="font-size:0.55rem;color:rgba(255,255,255,0.28);letter-spacing:0.07em;text-transform:uppercase;">Max Profit</div>'
@@ -482,12 +535,13 @@ def _option_play_html(r: dict) -> str:
         '</div>'
 
         '<div style="padding:8px 10px;">'
-        '<div style="font-size:0.55rem;color:rgba(255,255,255,0.28);letter-spacing:0.07em;text-transform:uppercase;">Est. IV</div>'
+        '<div style="font-size:0.55rem;color:rgba(255,255,255,0.28);letter-spacing:0.07em;text-transform:uppercase;">IV</div>'
         f'<div style="font-size:0.82rem;font-weight:700;color:#eab308;margin-top:2px;">{iv_str}</div>'
         '</div>'
 
         '</div>'
-
+        + details_row
+        + warnings_html
         + (
             f'<div style="font-size:0.68rem;color:rgba(255,255,255,0.38);'
             f'margin-top:7px;line-height:1.45;">{rationale}</div>'

@@ -523,6 +523,8 @@ def compute_entry_exit(
 
 _expiry_cache:  TTLCache = TTLCache(maxsize=300, ttl=3_600)   # 1-hour cache per symbol
 _strikes_cache: TTLCache = TTLCache(maxsize=300, ttl=3_600)   # strikes per symbol+expiry
+_chain_cache:   TTLCache = TTLCache(maxsize=200, ttl=3_600)   # full chain per symbol+expiry
+_events_cache:  TTLCache = TTLCache(maxsize=400, ttl=3_600)   # earnings/dividends per symbol
 
 
 def get_option_expiries(symbol: str) -> list:
@@ -548,26 +550,125 @@ def get_option_expiries(symbol: str) -> list:
         return []
 
 
+def get_option_chain(symbol: str, expiry_date: date) -> dict:
+    """
+    Fetch full options chain (calls + puts DataFrames) for symbol and expiry.
+    Returns {"calls": DataFrame, "puts": DataFrame}. Cached 1h.
+    """
+    expiry_str = expiry_date.isoformat()
+    key = f"chain_{symbol}_{expiry_str}"
+    if key in _chain_cache:
+        return _chain_cache[key]
+    try:
+        chain = yf.Ticker(symbol).option_chain(expiry_str)
+        result = {"calls": chain.calls if chain.calls is not None else pd.DataFrame(), "puts": chain.puts if chain.puts is not None else pd.DataFrame()}
+    except Exception as e:
+        logger.debug(f"Option chain fetch failed {symbol} {expiry_str}: {e}")
+        result = {"calls": pd.DataFrame(), "puts": pd.DataFrame()}
+    _chain_cache[key] = result
+    return result
+
+
 def get_real_strikes(symbol: str, expiry_date: date) -> dict:
     """
     Fetch real call and put strikes from the live options chain for a specific expiry.
     Returns {"calls": [float, ...], "puts": [float, ...]} sorted ascending.
-    Cached for 1 hour.  Returns empty lists on failure.
+    Uses get_option_chain so the full chain is cached for contract lookups.
     """
+    chain = get_option_chain(symbol, expiry_date)
     expiry_str = expiry_date.isoformat()
     key = f"strikes_{symbol}_{expiry_str}"
     if key in _strikes_cache:
         return _strikes_cache[key]
     try:
-        chain = yf.Ticker(symbol).option_chain(expiry_str)
-        calls = sorted(float(s) for s in chain.calls["strike"].dropna().tolist())
-        puts  = sorted(float(s) for s in chain.puts["strike"].dropna().tolist())
+        calls = sorted(float(s) for s in chain["calls"]["strike"].dropna().tolist()) if not chain["calls"].empty else []
+        puts  = sorted(float(s) for s in chain["puts"]["strike"].dropna().tolist()) if not chain["puts"].empty else []
         result = {"calls": calls, "puts": puts}
-    except Exception as e:
-        logger.debug(f"Strike fetch failed for {symbol} {expiry_str}: {e}")
+    except Exception:
         result = {"calls": [], "puts": []}
     _strikes_cache[key] = result
     return result
+
+
+def _row_for_strike(df: pd.DataFrame, strike: float) -> Optional[dict]:
+    """Get first row of DataFrame where strike column equals strike (within 0.02)."""
+    if df is None or df.empty:
+        return None
+    strike_col = None
+    for c in df.columns:
+        if str(c).lower() == "strike":
+            strike_col = c
+            break
+    if strike_col is None:
+        return None
+    col = df[strike_col].astype(float)
+    idx = (col - strike).abs().argmin()
+    match = df.iloc[idx]
+    if abs(float(match.get(strike_col, 0)) - strike) > 0.02:
+        return None
+    return match.to_dict()
+
+
+def get_earnings_dividends(symbol: str) -> dict:
+    """
+    Next earnings date and next ex-dividend date (free, yfinance).
+    Returns {next_earnings_date, next_ex_div_date, earnings_warning, ex_div_warning}.
+    Important for options: avoid holding through earnings (IV crush), ex-div (assignment).
+    """
+    key = f"events_{symbol}"
+    if key in _events_cache:
+        return _events_cache[key]
+    out = {"next_earnings_date": None, "next_ex_div_date": None, "earnings_warning": "", "ex_div_warning": ""}
+    try:
+        ticker = yf.Ticker(symbol)
+        today = date.today()
+
+        def _to_date(d) -> Optional[date]:
+            if d is None:
+                return None
+            if hasattr(d, "date"):
+                return d.date() if hasattr(d, "date") else d
+            if isinstance(d, str):
+                try:
+                    return date.fromisoformat(d[:10])
+                except Exception:
+                    return None
+            return None
+
+        # Earnings
+        try:
+            eds = getattr(ticker, "get_earnings_dates", None)
+            if callable(eds):
+                df = eds(limit=8)
+                if df is not None and not df.empty:
+                    for idx in (df.index.tolist() if hasattr(df.index, "tolist") else []):
+                        d = _to_date(idx)
+                        if d and d >= today:
+                            out["next_earnings_date"] = d.isoformat()
+                            break
+        except Exception:
+            pass
+
+        # Dividends (ex-date)
+        try:
+            divs = ticker.get_dividends()
+            if divs is not None and len(divs) > 0:
+                for idx in (divs.index.tolist()[-8:] if hasattr(divs.index, "tolist") else []):
+                    d = _to_date(idx)
+                    if d and d >= today:
+                        out["next_ex_div_date"] = d.isoformat()
+                        break
+        except Exception:
+            pass
+
+        if out["next_earnings_date"]:
+            out["earnings_warning"] = f"Earnings {out['next_earnings_date']} — IV crush risk"
+        if out["next_ex_div_date"]:
+            out["ex_div_warning"] = f"Ex-div {out['next_ex_div_date']} — call assignment risk"
+    except Exception as e:
+        logger.debug(f"Earnings/dividends fetch {symbol}: {e}")
+    _events_cache[key] = out
+    return out
 
 
 def _nearest_strike(ideal: float, strikes: list, direction: str = "nearest") -> Optional[float]:
@@ -850,18 +951,64 @@ def compute_option_play(
         else:
             rationale += " Options flow opposes — caution."
 
+    # ── 6. Contract details: IV, liquidity, expected move, option breakeven ─────
+    contract_iv = None
+    contract_vol = None
+    contract_oi = None
+    option_premium = None
+    expected_move = None
+    option_breakeven = None
+    if symbol:
+        chain = get_option_chain(symbol, expiry_date)
+        df_side = chain["calls"] if is_bull or "Call" in strategy else chain["puts"]
+        if not df_side.empty:
+            row = _row_for_strike(df_side, strike)
+            if row:
+                def _get(key_aliases, default=None):
+                    for k in key_aliases:
+                        if k in row and row[k] is not None and (not isinstance(row[k], float) or not pd.isna(row[k])):
+                            return row[k]
+                    return default
+                contract_iv   = _get(["impliedVolatility", "iv", "implied volatility"], iv_estimate)
+                if contract_iv is not None:
+                    contract_iv = float(contract_iv) * 100 if float(contract_iv) < 2 else float(contract_iv)
+                contract_vol  = _get(["volume", "Volume"])
+                contract_oi   = _get(["openInterest", "open interest", "oi"])
+                bid           = _get(["bid", "Bid"])
+                ask           = _get(["ask", "Ask"])
+                option_premium = _get(["lastPrice", "last", "close"])
+                if contract_iv is not None and dte and dte > 0:
+                    iv_dec = float(contract_iv) / 100.0
+                    expected_move = round(price * iv_dec * (dte / 365) ** 0.5, 2)
+                if option_premium is not None:
+                    prem = float(option_premium)
+                    option_breakeven = round(strike + prem, 2) if is_bull or "Call" in strategy else round(strike - prem, 2)
+
+    # Earnings / ex-div (for warnings in UI)
+    events = get_earnings_dividends(symbol) if symbol else {}
+
     return {
-        "strategy":    strategy,
-        "contract":    contract,
-        "strike":      strike,
-        "strike2":     strike2,
-        "expiry_str":  expiry_str,
-        "expiry_date": expiry_date.isoformat(),
-        "rationale":   rationale,
-        "max_profit":  max_profit,
-        "max_loss":    max_loss,
-        "iv_estimate": iv_estimate,
-        "dte":         dte,
+        "strategy":        strategy,
+        "contract":        contract,
+        "strike":          strike,
+        "strike2":         strike2,
+        "expiry_str":      expiry_str,
+        "expiry_date":     expiry_date.isoformat(),
+        "rationale":       rationale,
+        "max_profit":      max_profit,
+        "max_loss":        max_loss,
+        "iv_estimate":     iv_estimate,
+        "dte":             dte,
+        "contract_iv":     round(contract_iv, 1) if contract_iv is not None else None,
+        "contract_volume": int(contract_vol) if contract_vol is not None else None,
+        "contract_oi":     int(contract_oi) if contract_oi is not None else None,
+        "expected_move":   expected_move,
+        "option_breakeven": option_breakeven,
+        "option_premium":  round(float(option_premium), 2) if option_premium is not None else None,
+        "earnings_warning": events.get("earnings_warning", ""),
+        "ex_div_warning":  events.get("ex_div_warning", ""),
+        "next_earnings":   events.get("next_earnings_date"),
+        "next_ex_div":     events.get("next_ex_div_date"),
     }
 
 
