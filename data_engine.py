@@ -40,8 +40,9 @@ def _news_ttl() -> int:
 
 _price_cache: TTLCache = TTLCache(maxsize=500, ttl=_price_ttl())
 _news_cache:  TTLCache = TTLCache(maxsize=200, ttl=_news_ttl())
-_flow_cache:  TTLCache = TTLCache(maxsize=300, ttl=600)    # 10 min for options flow
+_flow_cache:   TTLCache = TTLCache(maxsize=300, ttl=600)   # 10 min for options flow
 _social_cache: TTLCache = TTLCache(maxsize=300, ttl=900)   # 15 min for social sentiment
+_driver_cache: TTLCache = TTLCache(maxsize=400, ttl=1800)  # 30 min for price drivers
 
 COMPANY_NAMES: dict[str, str] = {
     "AAPL": "Apple Inc.",        "MSFT": "Microsoft Corp.",    "GOOGL": "Alphabet Inc.",
@@ -254,6 +255,93 @@ def fetch_social_sentiment(symbol: str) -> Optional[dict]:
     except Exception as e:
         logger.debug(f"Finnhub social sentiment error {symbol}: {e}")
         return None
+
+
+def fetch_price_drivers(symbol: str) -> dict:
+    """
+    Fetch data that helps explain what may be driving price (free: Finnhub + yfinance).
+    Returns: insiders, recommendation, price_target, spy_correlation, key_levels.
+    """
+    key = f"drivers_{symbol}"
+    if key in _driver_cache:
+        return _driver_cache[key]
+    out = {
+        "insiders": [], "insider_summary": "",
+        "recommendation": None, "price_target": None,
+        "spy_correlation": None, "spy_corr_label": "",
+        "key_levels": {},
+    }
+    try:
+        # ── Finnhub: insider transactions, recommendation, price target ────────
+        if config.FINNHUB_KEY:
+            with httpx.Client(timeout=8) as client:
+                for endpoint, store in [
+                    ("/stock/insider-transactions", "insiders"),
+                    ("/stock/recommendation", "rec"),
+                    ("/stock/price-target", "target"),
+                ]:
+                    try:
+                        resp = client.get(
+                            f"https://finnhub.io/api/v1{endpoint}",
+                            params={"symbol": symbol, "token": config.FINNHUB_KEY},
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            if store == "insiders" and isinstance(data, dict):
+                                trans = data.get("data", [])[:8]
+                                out["insiders"] = trans
+                                buys = sum(1 for t in trans if str(t.get("transactionCode", "")).upper() in ("P", "A", "G"))
+                                sells = sum(1 for t in trans if str(t.get("transactionCode", "")).upper() in ("S", "D"))
+                                if buys or sells:
+                                    out["insider_summary"] = f"Insiders: {buys} buy, {sells} sell (recent)"
+                            elif store == "rec" and isinstance(data, list) and data:
+                                latest = data[0]
+                                out["recommendation"] = {
+                                    "strongBuy": latest.get("strongBuy", 0),
+                                    "buy": latest.get("buy", 0),
+                                    "hold": latest.get("hold", 0),
+                                    "sell": latest.get("sell", 0),
+                                    "strongSell": latest.get("strongSell", 0),
+                                    "period": latest.get("period", ""),
+                                }
+                            elif store == "target" and isinstance(data, dict) and data.get("targetMean"):
+                                out["price_target"] = {
+                                    "target_mean": float(data.get("targetMean", 0)),
+                                    "target_high": float(data.get("targetHigh", 0)),
+                                    "target_low": float(data.get("targetLow", 0)),
+                                }
+                    except Exception as e:
+                        logger.debug(f"Finnhub {endpoint} {symbol}: {e}")
+
+        # ── SPY correlation (yfinance, free) ───────────────────────────────────
+        try:
+            sym_df = get_price_data(symbol, period="3mo")
+            spy_df = get_price_data("SPY", period="3mo")
+            sym_close = sym_df["close"].dropna()
+            spy_close = spy_df["close"].dropna()
+            common = sym_close.index.intersection(spy_close.index)
+            if len(common) >= 20:
+                sym_ret = sym_close.reindex(common).ffill().bfill().pct_change().dropna()
+                spy_ret = spy_close.reindex(common).ffill().bfill().pct_change().dropna()
+                valid = sym_ret.notna() & spy_ret.notna()
+                if valid.sum() >= 15:
+                    corr = float(sym_ret[valid].corr(spy_ret[valid]))
+                    out["spy_correlation"] = round(corr, 2)
+                    if corr > 0.7:
+                        out["spy_corr_label"] = "High β vs SPY — moves with market"
+                    elif corr > 0.3:
+                        out["spy_corr_label"] = "Moderate β vs SPY"
+                    elif corr > -0.3:
+                        out["spy_corr_label"] = "Low correlation — idiosyncratic"
+                    else:
+                        out["spy_corr_label"] = "Negative β — defensive"
+        except Exception as e:
+            logger.debug(f"SPY correlation {symbol}: {e}")
+
+    except Exception as e:
+        logger.debug(f"Price drivers {symbol}: {e}")
+    _driver_cache[key] = out
+    return out
 
 
 def fetch_news(symbol: str) -> list[dict]:

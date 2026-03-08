@@ -28,7 +28,7 @@ from universe import get_screened_candidates, get_universe_names
 from data_engine import (
     get_price_data, get_quote, fetch_news, compute_sentiment_score, compute_indicators,
     compute_entry_exit, compute_option_play,
-    fetch_options_flow, fetch_social_sentiment,
+    fetch_options_flow, fetch_social_sentiment, fetch_price_drivers,
 )
 from ml_model import get_confidence
 from alerts import send_alert_email
@@ -271,6 +271,13 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
                 f"📊 Social buzz: {social_sent['buzz_label']} ({social_sent['buzz']} mentions)"
             )
 
+        # Price drivers: insider activity, analyst recs, price target, SPY correlation
+        drivers = fetch_price_drivers(symbol)
+        if drivers.get("insider_summary"):
+            catalysts.append(drivers["insider_summary"])
+        if drivers.get("spy_corr_label") and drivers.get("spy_correlation") is not None:
+            catalysts.append(f"📉 {drivers['spy_corr_label']} (ρ={drivers['spy_correlation']:.2f})")
+
         price = quote.get("price", 0.0)
         atr   = ind["atr"] or (price * 0.02)
 
@@ -375,6 +382,8 @@ def _analyze(symbol: str, name: str) -> Optional[dict]:
             "social_sentiment": social_sent,
             "geo_news":        geo_news[:3],
             "rumor_news":      rumor_news[:3],
+            # ── Price drivers (what may be moving price) ──
+            "price_drivers":   drivers,
         }
     except Exception as e:
         logger.debug(f"Analysis failed for {symbol}: {e}")

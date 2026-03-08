@@ -25,6 +25,31 @@ from ml_model import is_model_trained, train_model
 from alerts import send_test_email
 from data_engine import get_price_data
 
+
+@st.cache_data(ttl=600)
+def _cached_chart_data(symbol: str, period: str) -> pd.DataFrame | None:
+    """Fetch and precompute chart OHLC + indicators. Cached 10 min for fast symbol switching."""
+    try:
+        df = get_price_data(symbol, period).reset_index()
+        df.columns = [c.lower() for c in df.columns]
+        close = df["close"]
+        df["sma20"] = close.rolling(20).mean()
+        df["sma50"] = close.rolling(50).mean()
+        df["sma200"] = close.rolling(200).mean()
+        df["vol_avg"] = df["volume"].rolling(20).mean()
+        std20 = close.rolling(20).std()
+        df["bb_up"] = df["sma20"] + 2 * std20
+        df["bb_lo"] = df["sma20"] - 2 * std20
+        delta = close.diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        rs = gain / loss.replace(0, float("nan"))
+        df["rsi"] = 100 - (100 / (1 + rs))
+        return df
+    except Exception:
+        return None
+
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="BreakoutAI",
@@ -36,127 +61,140 @@ st.set_page_config(
 # ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 /* ── Base ── */
-.stApp { background: #050507; font-family: 'Inter', -apple-system, sans-serif; }
-[data-testid="stSidebar"] {
-    background: #0A0A0D;
-    border-right: 1px solid rgba(255,255,255,0.05);
+.stApp {
+    background: linear-gradient(180deg, #060608 0%, #0a0a0f 50%, #050507 100%);
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
 }
-.block-container { padding: 0 2rem 2rem; max-width: 1280px; }
-h1,h2,h3,h4 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; }
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #08080b 0%, #0c0c10 100%);
+    border-right: 1px solid rgba(255,255,255,0.04);
+}
+.block-container { padding: 0 2.5rem 2.5rem; max-width: 1400px; }
+h1,h2,h3,h4 { font-family: 'DM Sans', sans-serif; letter-spacing: -0.03em; font-weight: 700; }
 
 /* ── Page header strip ── */
 .page-header {
-    background: linear-gradient(135deg, #0A0A0D 0%, #0d0d12 100%);
-    border-bottom: 1px solid rgba(255,255,255,0.06);
-    padding: 18px 0 16px;
-    margin-bottom: 24px;
+    background: rgba(8,8,12,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    padding: 22px 0 18px;
+    margin: 0 -2.5rem 28px -2.5rem;
+    padding-left: 2.5rem; padding-right: 2.5rem;
 }
 .page-header-title {
-    font-size: 1.6rem; font-weight: 800; color: #fff;
-    letter-spacing: -0.03em; line-height: 1;
+    font-size: 1.75rem; font-weight: 800; color: #fff;
+    letter-spacing: -0.04em; line-height: 1.1;
 }
-.page-header-sub { font-size: 0.78rem; color: rgba(255,255,255,0.4); margin-top: 4px; }
+.page-header-sub { font-size: 0.8rem; color: rgba(255,255,255,0.35); margin-top: 5px; letter-spacing: 0.02em; }
 
 /* ── KPI cards ── */
 .metric-card {
-    background: #0C0C10;
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 14px;
-    padding: 18px 16px;
+    background: rgba(12,12,16,0.6);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 16px;
+    padding: 20px 18px;
     text-align: center;
-    transition: background 0.2s, border-color 0.2s;
+    transition: all 0.25s ease;
     height: 100%;
 }
-.metric-card:hover { background: #141418; border-color: rgba(255,255,255,0.10); }
+.metric-card:hover {
+    background: rgba(18,18,24,0.8);
+    border-color: rgba(255,255,255,0.08);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
 .metric-value {
-    font-size: 1.9rem; font-weight: 800;
-    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-    letter-spacing: -0.03em; line-height: 1.1;
+    font-size: 2rem; font-weight: 800;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: -0.02em; line-height: 1.15;
 }
 .metric-label {
-    font-size: 0.65rem; color: rgba(255,255,255,0.38); font-weight: 600;
-    letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px;
+    font-size: 0.62rem; color: rgba(255,255,255,0.35); font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px;
 }
 .metric-delta {
-    font-size: 0.7rem; color: rgba(255,255,255,0.4); margin-top: 4px;
+    font-size: 0.72rem; color: rgba(255,255,255,0.4); margin-top: 5px;
 }
 
 /* ── Section header ── */
 .section-header {
-    display: flex; align-items: center; gap: 10px;
-    padding: 20px 0 12px;
-    border-bottom: 1px solid rgba(255,255,255,0.05);
-    margin-bottom: 16px;
+    display: flex; align-items: center; gap: 12px;
+    padding: 24px 0 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    margin-bottom: 18px;
 }
-.section-title { font-size: 0.95rem; font-weight: 700; color: #fff; }
+.section-title { font-size: 1rem; font-weight: 700; color: #fff; letter-spacing: -0.02em; }
 .section-count {
-    font-size: 0.72rem; color: rgba(255,255,255,0.4);
-    background: rgba(255,255,255,0.06); border-radius: 20px;
-    padding: 2px 9px; font-weight: 500;
+    font-size: 0.7rem; color: rgba(255,255,255,0.35);
+    background: rgba(255,255,255,0.05); border-radius: 24px;
+    padding: 3px 11px; font-weight: 500; letter-spacing: 0.03em;
 }
 
 /* ── Alert / breakout cards ── */
 .alert-card {
-    background: #0C0C10;
-    border: 1px solid rgba(0,200,5,0.2);
-    border-radius: 14px; padding: 18px 20px; margin-bottom: 10px;
-    transition: background 0.2s, border-color 0.2s;
+    background: rgba(12,12,16,0.7);
+    border: 1px solid rgba(0,200,5,0.15);
+    border-radius: 16px; padding: 20px 22px; margin-bottom: 12px;
+    transition: all 0.2s ease;
 }
-.alert-card:hover { background: #101014; border-color: rgba(0,200,5,0.35); }
+.alert-card:hover { background: rgba(16,20,18,0.9); border-color: rgba(0,200,5,0.25); }
 .alert-card-bear {
-    background: #0C0C10;
-    border: 1px solid rgba(242,54,69,0.2);
-    border-radius: 14px; padding: 18px 20px; margin-bottom: 10px;
-    transition: background 0.2s, border-color 0.2s;
+    background: rgba(12,12,16,0.7);
+    border: 1px solid rgba(242,54,69,0.15);
+    border-radius: 16px; padding: 20px 22px; margin-bottom: 12px;
+    transition: all 0.2s ease;
 }
-.alert-card-bear:hover { background: #101014; border-color: rgba(242,54,69,0.35); }
+.alert-card-bear:hover { background: rgba(20,16,18,0.9); border-color: rgba(242,54,69,0.25); }
 
 /* ── Signal badges ── */
 .sig-bull {
-    background: rgba(0,200,5,0.1); color: #00C805;
-    border-radius: 6px; padding: 3px 9px; font-size: 0.68rem; font-weight: 600;
-    display: inline-block; margin: 2px; border: 1px solid rgba(0,200,5,0.2);
+    background: rgba(0,200,5,0.08); color: #00C805;
+    border-radius: 8px; padding: 4px 10px; font-size: 0.66rem; font-weight: 600;
+    display: inline-block; margin: 2px; border: 1px solid rgba(0,200,5,0.18);
+    letter-spacing: 0.03em;
 }
 .sig-bear {
-    background: rgba(242,54,69,0.1); color: #F23645;
-    border-radius: 6px; padding: 3px 9px; font-size: 0.68rem; font-weight: 600;
-    display: inline-block; margin: 2px; border: 1px solid rgba(242,54,69,0.2);
+    background: rgba(242,54,69,0.08); color: #F23645;
+    border-radius: 8px; padding: 4px 10px; font-size: 0.66rem; font-weight: 600;
+    display: inline-block; margin: 2px; border: 1px solid rgba(242,54,69,0.18);
+    letter-spacing: 0.03em;
 }
 .sig-neut {
-    background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.45);
-    border-radius: 6px; padding: 3px 9px; font-size: 0.68rem;
-    display: inline-block; margin: 2px; border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.5);
+    border-radius: 8px; padding: 4px 10px; font-size: 0.66rem;
+    display: inline-block; margin: 2px; border: 1px solid rgba(255,255,255,0.06);
 }
 
 /* ── Live dot ── */
 .live-dot {
-    width: 7px; height: 7px; background: #00C805; border-radius: 50%;
-    display: inline-block; margin-right: 7px;
-    box-shadow: 0 0 6px rgba(0,200,5,0.7);
+    width: 8px; height: 8px; background: #00C805; border-radius: 50%;
+    display: inline-block; margin-right: 8px;
+    box-shadow: 0 0 8px rgba(0,200,5,0.6);
     animation: pulse-dot 2s infinite;
 }
 .idle-dot {
-    width: 7px; height: 7px; background: rgba(255,255,255,0.3); border-radius: 50%;
-    display: inline-block; margin-right: 7px;
+    width: 8px; height: 8px; background: rgba(255,255,255,0.25); border-radius: 50%;
+    display: inline-block; margin-right: 8px;
 }
-@keyframes pulse-dot { 0%,100%{opacity:1;box-shadow:0 0 6px rgba(0,200,5,0.7);}
-                        50%{opacity:0.5;box-shadow:0 0 3px rgba(0,200,5,0.3);} }
+@keyframes pulse-dot { 0%,100%{opacity:1;box-shadow:0 0 8px rgba(0,200,5,0.6);}
+                        50%{opacity:0.6;box-shadow:0 0 4px rgba(0,200,5,0.3);} }
 
 /* ── Progress bar ── */
 .progress-bar-outer {
-    background: rgba(255,255,255,0.07); border-radius: 8px;
-    height: 5px; overflow: hidden; margin: 8px 0;
+    background: rgba(255,255,255,0.05); border-radius: 10px;
+    height: 6px; overflow: hidden; margin: 10px 0;
 }
-.progress-bar-inner { height: 100%; border-radius: 8px; background: #00C805; transition: width 0.6s ease; }
+.progress-bar-inner { height: 100%; border-radius: 10px; background: linear-gradient(90deg,#00C805,#22c55e); transition: width 0.6s ease; }
 @keyframes shimmer {
     0%{background-position:-200% center;}
     100%{background-position:200% center;}
 }
 .progress-shimmer {
-    height: 100%; border-radius: 8px;
+    height: 100%; border-radius: 10px;
     background: linear-gradient(90deg,#00C805 25%,#22c55e 50%,#00C805 75%);
     background-size: 200% auto;
     animation: shimmer 1.8s linear infinite;
@@ -165,112 +203,112 @@ h1,h2,h3,h4 { font-family: 'Inter', sans-serif; letter-spacing: -0.02em; }
 /* ── Stock table rows ── */
 .stock-row {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 20px; border-bottom: 1px solid rgba(255,255,255,0.05);
-    transition: background 0.15s;
+    padding: 16px 22px; border-bottom: 1px solid rgba(255,255,255,0.04);
+    transition: background 0.2s;
 }
-.stock-row:hover { background: rgba(255,255,255,0.025); }
+.stock-row:hover { background: rgba(255,255,255,0.03); }
 .stock-row:last-child { border-bottom: none; }
-.stock-symbol { font-size: 1rem; font-weight: 700; color: #fff; letter-spacing: -0.01em; }
-.stock-name { font-size: 0.75rem; color: rgba(255,255,255,0.38); margin-top: 1px; }
-.stock-price { font-size: 0.95rem; font-weight: 600; color: #fff; text-align: right; }
-.stock-change { font-size: 0.9rem; font-weight: 600; text-align: right; }
-.stock-conf { font-size: 0.82rem; font-weight: 700; }
+.stock-symbol { font-size: 1.02rem; font-weight: 700; color: #fff; letter-spacing: -0.02em; }
+.stock-name { font-size: 0.76rem; color: rgba(255,255,255,0.4); margin-top: 2px; }
+.stock-price { font-size: 0.98rem; font-weight: 600; color: #fff; text-align: right; font-family: 'JetBrains Mono', monospace; }
+.stock-change { font-size: 0.92rem; font-weight: 600; text-align: right; }
+.stock-conf { font-size: 0.84rem; font-weight: 700; }
 
 /* ── Expiry lane ── */
 .expiry-lane {
-    border-radius: 12px; padding: 16px 18px; margin-bottom: 8px;
-    transition: opacity 0.2s;
+    border-radius: 14px; padding: 18px 20px; margin-bottom: 10px;
+    transition: all 0.2s;
 }
-.expiry-lane:hover { opacity: 0.92; }
+.expiry-lane:hover { opacity: 0.95; }
 
 /* ── Heatmap cell ── */
 .heat-cell {
-    border-radius: 10px; padding: 10px 8px; text-align: center;
-    transition: transform 0.15s;
+    border-radius: 12px; padding: 12px 10px; text-align: center;
+    transition: transform 0.2s;
     cursor: default;
 }
-.heat-cell:hover { transform: scale(1.04); }
+.heat-cell:hover { transform: scale(1.05); }
 
 /* ── Alert timeline row ── */
 .alert-row {
-    display: flex; align-items: center; gap: 14px;
-    padding: 12px 16px; border-radius: 10px; margin-bottom: 6px;
-    background: #0C0C10; border: 1px solid rgba(255,255,255,0.05);
-    transition: background 0.15s;
+    display: flex; align-items: center; gap: 16px;
+    padding: 14px 18px; border-radius: 12px; margin-bottom: 8px;
+    background: rgba(12,12,16,0.6); border: 1px solid rgba(255,255,255,0.04);
+    transition: background 0.2s;
 }
-.alert-row:hover { background: #101014; }
+.alert-row:hover { background: rgba(16,16,20,0.8); }
 
 /* ── Sub-tabs (direction) ── */
 .dir-tab-active {
-    background: rgba(0,200,5,0.12); color: #00C805;
-    border: 1px solid rgba(0,200,5,0.3); border-radius: 20px;
-    padding: 5px 16px; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+    background: rgba(0,200,5,0.1); color: #00C805;
+    border: 1px solid rgba(0,200,5,0.25); border-radius: 24px;
+    padding: 6px 18px; font-size: 0.82rem; font-weight: 600; cursor: pointer;
 }
 .dir-tab-inactive {
-    background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.5);
-    border: 1px solid rgba(255,255,255,0.08); border-radius: 20px;
-    padding: 5px 16px; font-size: 0.8rem; font-weight: 500; cursor: pointer;
+    background: rgba(255,255,255,0.03); color: rgba(255,255,255,0.5);
+    border: 1px solid rgba(255,255,255,0.06); border-radius: 24px;
+    padding: 6px 18px; font-size: 0.82rem; font-weight: 500; cursor: pointer;
 }
 
 /* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 0; border-bottom: 1px solid rgba(255,255,255,0.07);
+    gap: 0; border-bottom: 1px solid rgba(255,255,255,0.05);
     background: transparent;
 }
 .stTabs [data-baseweb="tab"] {
-    padding: 12px 22px; font-weight: 500; font-size: 0.88rem;
-    color: rgba(255,255,255,0.5); border-radius: 0;
+    padding: 14px 24px; font-weight: 500; font-size: 0.9rem;
+    color: rgba(255,255,255,0.45); border-radius: 0;
 }
 .stTabs [aria-selected="true"] {
     border-bottom: 2px solid #00C805 !important;
-    color: #fff !important;
+    color: #fff !important; font-weight: 600;
 }
 
 /* ── Buttons ── */
 .stButton > button {
-    border-radius: 10px; font-weight: 600; font-size: 0.88rem;
-    transition: all 0.15s;
+    border-radius: 12px; font-weight: 600; font-size: 0.9rem;
+    transition: all 0.2s ease;
 }
-.stButton > button:hover { transform: translateY(-1px); }
+.stButton > button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
 
 /* ── Sidebar stat pill ── */
 .stat-pill {
     display: flex; align-items: center; justify-content: space-between;
-    background: rgba(255,255,255,0.04); border-radius: 8px;
-    padding: 8px 12px; margin-bottom: 6px;
-    font-size: 0.82rem;
+    background: rgba(255,255,255,0.03); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 8px;
+    font-size: 0.84rem;
 }
-.stat-pill-label { color: rgba(255,255,255,0.45); }
-.stat-pill-val { color: #fff; font-weight: 600; }
+.stat-pill-label { color: rgba(255,255,255,0.4); }
+.stat-pill-val { color: #fff; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
 
 /* ── Trade plan box ── */
 .trade-plan {
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 10px; padding: 10px 14px; margin-top: 10px;
-    font-size: 0.79rem; display: flex; gap: 16px; flex-wrap: wrap;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 12px; padding: 12px 16px; margin-top: 12px;
+    font-size: 0.8rem; display: flex; gap: 18px; flex-wrap: wrap;
     align-items: center;
 }
 
 /* ── Direction badge ── */
 .dir-bull {
-    background: rgba(0,200,5,0.1); color: #00C805;
-    border-radius: 5px; padding: 2px 8px; font-size: 0.67rem; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.05em;
+    background: rgba(0,200,5,0.08); color: #00C805;
+    border-radius: 8px; padding: 3px 10px; font-size: 0.66rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
 }
 .dir-bear {
-    background: rgba(242,54,69,0.1); color: #F23645;
-    border-radius: 5px; padding: 2px 8px; font-size: 0.67rem; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.05em;
+    background: rgba(242,54,69,0.08); color: #F23645;
+    border-radius: 8px; padding: 3px 10px; font-size: 0.66rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
 }
 .dir-neut {
-    background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5);
-    border-radius: 5px; padding: 2px 8px; font-size: 0.67rem; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.05em;
+    background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.5);
+    border-radius: 8px; padding: 3px 10px; font-size: 0.66rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.06em;
 }
 
 /* Selectbox / inputs */
-.stSelectbox > div > div, .stTextInput > div > div { border-radius: 10px; }
+.stSelectbox > div > div, .stTextInput > div > div { border-radius: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -552,6 +590,82 @@ def _option_play_html(r: dict) -> str:
     )
 
 
+def _price_drivers_html(r: dict) -> str:
+    """Render analyst recs, price targets, insider activity, SPY correlation — what may drive price."""
+    pd_ = r.get("price_drivers") or {}
+    parts = []
+    price = r.get("price")
+    # Analyst recommendation
+    rec = pd_.get("recommendation")
+    if rec and isinstance(rec, dict):
+        sb, b, h, s, ss = rec.get("strongBuy", 0), rec.get("buy", 0), rec.get("hold", 0), rec.get("sell", 0), rec.get("strongSell", 0)
+        total = sb + b + h + s + ss
+        if total > 0:
+            bull = sb + b
+            bear = s + ss
+            if bull > bear:
+                label = "Strong Buy" if sb > b else "Buy"
+                col = "#00C805"
+            elif bear > bull:
+                label = "Strong Sell" if ss > s else "Sell"
+                col = "#F23645"
+            else:
+                label = "Hold"
+                col = "#eab308"
+            parts.append(
+                f'<div style="display:flex;align-items:center;gap:6px;">'
+                f'<span style="font-size:0.6rem;color:rgba(255,255,255,0.3);text-transform:uppercase;">Analyst</span>'
+                f'<span style="font-size:0.8rem;font-weight:700;color:{col};">{label}</span>'
+                f'<span style="font-size:0.68rem;color:rgba(255,255,255,0.4);">({bull}B/{h}H/{bear}S)</span></div>'
+            )
+    # Price target
+    pt = pd_.get("price_target")
+    if pt and isinstance(pt, dict) and price and price > 0:
+        mean = pt.get("target_mean")
+        high = pt.get("target_high")
+        low = pt.get("target_low")
+        if mean and mean > 0:
+            pct = ((mean - price) / price) * 100
+            col = "#00C805" if pct > 0 else "#F23645" if pct < 0 else "#eab308"
+            extra = ""
+            if high and low and high != low:
+                extra = f"  ·  range ${low:.1f}–${high:.1f}"
+            parts.append(
+                f'<div style="display:flex;align-items:center;gap:6px;">'
+                f'<span style="font-size:0.6rem;color:rgba(255,255,255,0.3);text-transform:uppercase;">Target</span>'
+                f'<span style="font-size:0.8rem;font-weight:700;color:{col};">${mean:.2f} ({pct:+.1f}%)</span>'
+                f'<span style="font-size:0.68rem;color:rgba(255,255,255,0.4);">{extra}</span></div>'
+            )
+    # Insider summary
+    ins = pd_.get("insider_summary")
+    if ins:
+        parts.append(
+            f'<div style="display:flex;align-items:center;gap:6px;">'
+            f'<span style="font-size:0.6rem;color:rgba(255,255,255,0.3);text-transform:uppercase;">Insiders</span>'
+            f'<span style="font-size:0.78rem;font-weight:600;color:rgba(255,255,255,0.8);">{ins}</span></div>'
+        )
+    # SPY correlation
+    corr = pd_.get("spy_correlation")
+    lab = pd_.get("spy_corr_label")
+    if lab and corr is not None:
+        col = "#eab308" if abs(corr) > 0.5 else "rgba(255,255,255,0.6)"
+        parts.append(
+            f'<div style="display:flex;align-items:center;gap:6px;">'
+            f'<span style="font-size:0.6rem;color:rgba(255,255,255,0.3);text-transform:uppercase;">Market</span>'
+            f'<span style="font-size:0.78rem;font-weight:600;color:{col};">{lab} (ρ={corr:.2f})</span></div>'
+        )
+    if not parts:
+        return ""
+    return (
+        '<div style="margin-top:10px;padding:10px 12px;background:rgba(255,255,255,0.02);'
+        'border:1px solid rgba(255,255,255,0.06);border-radius:8px;">'
+        '<div style="font-size:0.58rem;color:rgba(255,255,255,0.28);letter-spacing:0.08em;'
+        'text-transform:uppercase;margin-bottom:8px;">Price drivers</div>'
+        + "".join(parts) +
+        '</div>'
+    )
+
+
 def _alt_data_html(r: dict) -> str:
     """Render Options flow, Social/Rumors, and Geopolitical when present."""
     parts = []
@@ -640,6 +754,8 @@ def _breakout_card_html(r: dict) -> str:
 
     # Alternative data panel: Options flow, Social/Rumors, Geopolitical
     alt_html = _alt_data_html(r)
+    # Price drivers: analyst recs, price targets, insiders, SPY correlation
+    pd_html = _price_drivers_html(r)
 
     sep = '<div style="padding:10px 12px;border-right:1px solid rgba(255,255,255,0.05);">'
 
@@ -676,6 +792,7 @@ def _breakout_card_html(r: dict) -> str:
         + _trade_plan_html(r)
         + _option_play_html(r)
         + alt_html
+        + pd_html
         + f'<div style="margin-top:10px;">{_badges(r["signals"])}</div>'
         + cats_section
         + f'</div>'
@@ -1275,6 +1392,7 @@ with t2:
             + trade_plan_html
             + _option_play_html(r)
             + _alt_data_html(r)
+            + _price_drivers_html(r)
             + f'<div style="margin-top:8px;">{_badges(r["signals"][:4])}</div>'
             + f'</div>'
         )
@@ -1458,168 +1576,158 @@ with t4:
     if sym:
         with st.spinner(f"Loading {sym}…"):
             try:
-                df = get_price_data(sym, period=chart_per).reset_index()
-                df.columns = [c.lower() for c in df.columns]
-                dc    = df.columns[0]
-                close = df["close"]
+                df = _cached_chart_data(sym, chart_per)
+                if df is None or df.empty:
+                    st.error(f"No price data for {sym}")
+                else:
+                    dc = df.columns[0]
+                    close = df["close"]
 
-                df["sma20"]   = close.rolling(20).mean()
-                df["sma50"]   = close.rolling(50).mean()
-                df["sma200"]  = close.rolling(200).mean()
-                df["vol_avg"] = df["volume"].rolling(20).mean()
+                    # ── Figure: price + volume + RSI ──────────────────────────────
+                    fig = make_subplots(
+                        rows=3, cols=1, shared_xaxes=True,
+                        row_heights=[0.60, 0.20, 0.20],
+                        vertical_spacing=0.03,
+                    )
 
-                std20 = close.rolling(20).std()
-                df["bb_up"] = df["sma20"] + 2 * std20
-                df["bb_lo"] = df["sma20"] - 2 * std20
-
-                # RSI
-                delta = close.diff()
-                gain  = delta.clip(lower=0).rolling(14).mean()
-                loss  = (-delta.clip(upper=0)).rolling(14).mean()
-                rs    = gain / loss.replace(0, float("nan"))
-                df["rsi"] = 100 - (100 / (1 + rs))
-
-                # ── Figure: price + volume + RSI ──────────────────────────────
-                fig = make_subplots(
-                    rows=3, cols=1, shared_xaxes=True,
-                    row_heights=[0.60, 0.20, 0.20],
-                    vertical_spacing=0.03,
-                )
-
-                # Candlesticks
-                fig.add_trace(go.Candlestick(
-                    x=df[dc], open=df["open"], high=df["high"],
-                    low=df["low"], close=close, name=sym,
-                    increasing_line_color="#00C805", decreasing_line_color="#F23645",
-                    increasing_fillcolor="#00C805", decreasing_fillcolor="#F23645",
-                ), row=1, col=1)
-
-                for name, col_name, clr, dash in [
-                    ("SMA 20", "sma20", "#00C805", "solid"),
-                    ("SMA 50", "sma50", "#eab308", "dot"),
-                    ("SMA 200","sma200","rgba(255,255,255,0.35)","dash"),
-                ]:
-                    fig.add_trace(go.Scatter(
-                        x=df[dc], y=df[col_name], name=name,
-                        line=dict(color=clr, width=1.5, dash=dash),
+                    # Candlesticks
+                    fig.add_trace(go.Candlestick(
+                        x=df[dc], open=df["open"], high=df["high"],
+                        low=df["low"], close=close, name=sym,
+                        increasing_line_color="#00C805", decreasing_line_color="#F23645",
+                        increasing_fillcolor="#00C805", decreasing_fillcolor="#F23645",
                     ), row=1, col=1)
 
-                fig.add_trace(go.Scatter(
-                    x=df[dc], y=df["bb_up"], name="BB Upper",
-                    line=dict(color="rgba(255,255,255,0.25)", width=1, dash="dot"),
-                ), row=1, col=1)
-                fig.add_trace(go.Scatter(
-                    x=df[dc], y=df["bb_lo"], name="BB Lower",
-                    line=dict(color="rgba(255,255,255,0.25)", width=1, dash="dot"),
-                    fill="tonexty", fillcolor="rgba(255,255,255,0.025)",
-                ), row=1, col=1)
+                    for name, col_name, clr, dash in [
+                        ("SMA 20", "sma20", "#00C805", "solid"),
+                        ("SMA 50", "sma50", "#eab308", "dot"),
+                        ("SMA 200","sma200","rgba(255,255,255,0.35)","dash"),
+                    ]:
+                        fig.add_trace(go.Scatter(
+                            x=df[dc], y=df[col_name], name=name,
+                            line=dict(color=clr, width=1.5, dash=dash),
+                        ), row=1, col=1)
 
-                res = next((r for r in live if r["symbol"] == sym), None)
-                is_bull_chart = res["direction"] == "bullish" if res else True
-                entry_price = res.get("entry") if res else None
-                sl_price    = res.get("stop_loss") if res else None
-                tp1_price   = res.get("take_profit_1") if res else None
-                tp2_price   = res.get("take_profit_2") if res else None
-                tp3_price   = res.get("take_profit_3") if res else None
+                    fig.add_trace(go.Scatter(
+                        x=df[dc], y=df["bb_up"], name="BB Upper",
+                        line=dict(color="rgba(255,255,255,0.25)", width=1, dash="dot"),
+                    ), row=1, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=df[dc], y=df["bb_lo"], name="BB Lower",
+                        line=dict(color="rgba(255,255,255,0.25)", width=1, dash="dot"),
+                        fill="tonexty", fillcolor="rgba(255,255,255,0.025)",
+                    ), row=1, col=1)
 
-                # ── Horizontal level lines on price chart ─────────────────────
-                x_range = [df[dc].iloc[0], df[dc].iloc[-1]]
+                    res = next((r for r in live if r["symbol"] == sym), None)
+                    is_bull_chart = res["direction"] == "bullish" if res else True
+                    entry_price = res.get("entry") if res else None
+                    sl_price    = res.get("stop_loss") if res else None
+                    tp1_price   = res.get("take_profit_1") if res else None
+                    tp2_price   = res.get("take_profit_2") if res else None
+                    tp3_price   = res.get("take_profit_3") if res else None
 
-                def _hline(price_val, color, label, dash="solid", width=1.5):
-                    if price_val is None:
-                        return
-                    fig.add_shape(type="line", x0=x_range[0], x1=x_range[1],
-                                  y0=price_val, y1=price_val,
-                                  line=dict(color=color, width=width, dash=dash),
-                                  row=1, col=1)
-                    fig.add_annotation(
-                        x=x_range[1], y=price_val,
-                        text=f"  {label} ${price_val:.2f}",
-                        showarrow=False, xanchor="left",
-                        font=dict(color=color, size=10),
-                        row=1, col=1,
-                    )
+                    # ── Horizontal level lines on price chart ─────────────────────
+                    x_range = [df[dc].iloc[0], df[dc].iloc[-1]]
 
-                if entry_price:
-                    _hline(entry_price, "#00C805",  "ENTRY", dash="solid",  width=2)
-                if sl_price:
-                    _hline(sl_price,    "#F23645",  "STOP",  dash="dash",   width=1.5)
-                if tp1_price:
-                    _hline(tp1_price,   "#22c55e",  "TP1",   dash="dot",    width=1.2)
-                if tp2_price:
-                    _hline(tp2_price,   "#00C805",  "TP2",   dash="dot",    width=1.2)
-                if tp3_price:
-                    _hline(tp3_price,   "#86efac",  "TP3",   dash="dot",    width=1)
-
-                # Confidence annotation on last candle
-                if res and res["confidence"] >= config.ALERT_THRESHOLD:
-                    fig.add_annotation(
-                        x=df[dc].iloc[-1], y=float(close.iloc[-1]),
-                        text=f"⚡ {res['confidence']:.0f}%",
-                        showarrow=True, arrowhead=2, arrowcolor="#00C805",
-                        font=dict(color="#00C805", size=12),
-                        bgcolor="rgba(0,200,5,0.1)", bordercolor="rgba(0,200,5,0.35)",
-                        row=1, col=1,
-                    )
-
-                # Volume
-                vc = ["#00C805" if c >= o else "#F23645"
-                      for c, o in zip(df["close"], df["open"])]
-                fig.add_trace(go.Bar(
-                    x=df[dc], y=df["volume"], marker_color=vc, opacity=0.6, name="Volume",
-                ), row=2, col=1)
-                fig.add_trace(go.Scatter(
-                    x=df[dc], y=df["vol_avg"], name="Vol 20d avg",
-                    line=dict(color="#eab308", width=1.5),
-                ), row=2, col=1)
-
-                # RSI
-                fig.add_trace(go.Scatter(
-                    x=df[dc], y=df["rsi"], name="RSI 14",
-                    line=dict(color="#0a84ff", width=1.5),
-                ), row=3, col=1)
-                for lvl, clr in [(70, "rgba(242,54,69,0.4)"), (30, "rgba(0,200,5,0.4)")]:
-                    fig.add_hline(y=lvl, line_dash="dot", line_color=clr,
-                                  line_width=1, row=3, col=1)
-
-                axis_style = dict(gridcolor="rgba(255,255,255,0.05)", showline=False, zeroline=False)
-                fig.update_layout(
-                    paper_bgcolor="#050507", plot_bgcolor="#0A0A0D",
-                    font=dict(color="rgba(255,255,255,0.6)", family="Inter, sans-serif"),
-                    height=620,
-                    xaxis=dict(**axis_style, rangeslider_visible=False),
-                    xaxis2=dict(**axis_style),
-                    xaxis3=dict(**axis_style),
-                    yaxis=dict(**axis_style, tickprefix="$"),
-                    yaxis2=dict(**axis_style),
-                    yaxis3=dict(**axis_style, range=[0, 100]),
-                    legend=dict(bgcolor="#0A0A0D", bordercolor="rgba(255,255,255,0.07)",
-                                orientation="h", y=-0.06, font=dict(size=11)),
-                    margin=dict(l=8, r=60, t=20, b=8),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-                # ── Precision trade panel below chart ─────────────────────────
-                if res:
-                    st.markdown("---")
-                    m1, m2, m3, m4, m5 = st.columns(5)
-                    m1.metric("ML Confidence",  f"{res['confidence']:.1f}%")
-                    m2.metric("Breakout Score", f"{res['final_score']:.0f}/100")
-                    m3.metric("RSI",            f"{res['rsi']:.1f}")
-                    m4.metric("Volume Ratio",   f"{res['vol_ratio']:.2f}x")
-                    m5.metric("Direction",      res["direction"].upper())
-
-                    if res.get("entry") is not None:
-                        st.markdown(
-                            _trade_plan_html(res) + _option_play_html(res)
-                            + _alt_data_html(res),
-                            unsafe_allow_html=True,
+                    def _hline(price_val, color, label, dash="solid", width=1.5):
+                        if price_val is None:
+                            return
+                        fig.add_shape(type="line", x0=x_range[0], x1=x_range[1],
+                                      y0=price_val, y1=price_val,
+                                      line=dict(color=color, width=width, dash=dash),
+                                      row=1, col=1)
+                        fig.add_annotation(
+                            x=x_range[1], y=price_val,
+                            text=f"  {label} ${price_val:.2f}",
+                            showarrow=False, xanchor="left",
+                            font=dict(color=color, size=10),
+                            row=1, col=1,
                         )
 
-                    if res.get("catalysts"):
-                        st.markdown("**Catalysts / Risks:**")
-                        for c in res["catalysts"]:
-                            st.markdown(f"- {c}")
+                    if entry_price:
+                        _hline(entry_price, "#00C805",  "ENTRY", dash="solid",  width=2)
+                    if sl_price:
+                        _hline(sl_price,    "#F23645",  "STOP",  dash="dash",   width=1.5)
+                    if tp1_price:
+                        _hline(tp1_price,   "#22c55e",  "TP1",   dash="dot",    width=1.2)
+                    if tp2_price:
+                        _hline(tp2_price,   "#00C805",  "TP2",   dash="dot",    width=1.2)
+                    if tp3_price:
+                        _hline(tp3_price,   "#86efac",  "TP3",   dash="dot",    width=1)
+
+                    # Confidence annotation on last candle
+                    if res and res["confidence"] >= config.ALERT_THRESHOLD:
+                        fig.add_annotation(
+                            x=df[dc].iloc[-1], y=float(close.iloc[-1]),
+                            text=f"⚡ {res['confidence']:.0f}%",
+                            showarrow=True, arrowhead=2, arrowcolor="#00C805",
+                            font=dict(color="#00C805", size=12),
+                            bgcolor="rgba(0,200,5,0.1)", bordercolor="rgba(0,200,5,0.35)",
+                            row=1, col=1,
+                        )
+
+                    # Volume
+                    vc = ["#00C805" if c >= o else "#F23645"
+                          for c, o in zip(df["close"], df["open"])]
+                    fig.add_trace(go.Bar(
+                        x=df[dc], y=df["volume"], marker_color=vc, opacity=0.6, name="Volume",
+                    ), row=2, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=df[dc], y=df["vol_avg"], name="Vol 20d avg",
+                        line=dict(color="#eab308", width=1.5),
+                    ), row=2, col=1)
+
+                    # RSI
+                    fig.add_trace(go.Scatter(
+                        x=df[dc], y=df["rsi"], name="RSI 14",
+                        line=dict(color="#0a84ff", width=1.5),
+                    ), row=3, col=1)
+                    for lvl, clr in [(70, "rgba(242,54,69,0.4)"), (30, "rgba(0,200,5,0.4)")]:
+                        fig.add_hline(y=lvl, line_dash="dot", line_color=clr,
+                                      line_width=1, row=3, col=1)
+
+                    axis_style = dict(gridcolor="rgba(255,255,255,0.05)", showline=False, zeroline=False)
+                    fig.update_layout(
+                        paper_bgcolor="#050507", plot_bgcolor="#0A0A0D",
+                        font=dict(color="rgba(255,255,255,0.6)", family="Inter, sans-serif"),
+                        height=620,
+                        xaxis=dict(**axis_style, rangeslider_visible=False),
+                        xaxis2=dict(**axis_style),
+                        xaxis3=dict(**axis_style),
+                        yaxis=dict(**axis_style, tickprefix="$"),
+                        yaxis2=dict(**axis_style),
+                        yaxis3=dict(**axis_style, range=[0, 100]),
+                        legend=dict(bgcolor="#0A0A0D", bordercolor="rgba(255,255,255,0.07)",
+                                    orientation="h", y=-0.06, font=dict(size=11)),
+                        margin=dict(l=8, r=60, t=20, b=8),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # ── Precision trade panel below chart ─────────────────────────
+                    if res:
+                        st.markdown("---")
+                        m1, m2, m3, m4, m5 = st.columns(5)
+                        m1.metric("ML Confidence",  f"{res['confidence']:.1f}%")
+                        m2.metric("Breakout Score", f"{res['final_score']:.0f}/100")
+                        m3.metric("RSI",            f"{res['rsi']:.1f}")
+                        m4.metric("Volume Ratio",   f"{res['vol_ratio']:.2f}x")
+                        m5.metric("Direction",      res["direction"].upper())
+
+                        if res.get("entry") is not None:
+                            st.markdown(
+                                _trade_plan_html(res) + _option_play_html(res)
+                                + _alt_data_html(res) + _price_drivers_html(res),
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            pd_html = _price_drivers_html(res)
+                            if pd_html:
+                                st.markdown(pd_html, unsafe_allow_html=True)
+
+                        if res.get("catalysts"):
+                            st.markdown("**Catalysts / Risks:**")
+                            for c in res["catalysts"]:
+                                st.markdown(f"- {c}")
 
             except Exception as e:
                 st.error(f"Chart error for {sym}: {e}")
