@@ -38,11 +38,11 @@ def _news_ttl() -> int:
     return 600 if _market_open() else 3_600
 
 
-_price_cache: TTLCache = TTLCache(maxsize=500, ttl=_price_ttl())
-_news_cache:  TTLCache = TTLCache(maxsize=200, ttl=_news_ttl())
-_flow_cache:   TTLCache = TTLCache(maxsize=300, ttl=600)   # 10 min for options flow
-_social_cache: TTLCache = TTLCache(maxsize=300, ttl=900)   # 15 min for social sentiment
-_driver_cache: TTLCache = TTLCache(maxsize=400, ttl=1800)  # 30 min for price drivers
+_price_cache: TTLCache = TTLCache(maxsize=200, ttl=_price_ttl())
+_news_cache:  TTLCache = TTLCache(maxsize=150, ttl=_news_ttl())
+_flow_cache:   TTLCache = TTLCache(maxsize=150, ttl=600)   # 10 min for options flow
+_social_cache: TTLCache = TTLCache(maxsize=150, ttl=900)   # 15 min for social sentiment
+_driver_cache: TTLCache = TTLCache(maxsize=150, ttl=1800)  # 30 min for price drivers
 
 COMPANY_NAMES: dict[str, str] = {
     "AAPL": "Apple Inc.",        "MSFT": "Microsoft Corp.",    "GOOGL": "Alphabet Inc.",
@@ -609,10 +609,10 @@ def compute_entry_exit(
     }
 
 
-_expiry_cache:  TTLCache = TTLCache(maxsize=300, ttl=3_600)   # 1-hour cache per symbol
-_strikes_cache: TTLCache = TTLCache(maxsize=300, ttl=3_600)   # strikes per symbol+expiry
-_chain_cache:   TTLCache = TTLCache(maxsize=200, ttl=3_600)   # full chain per symbol+expiry
-_events_cache:  TTLCache = TTLCache(maxsize=400, ttl=3_600)   # earnings/dividends per symbol
+_expiry_cache:  TTLCache = TTLCache(maxsize=150, ttl=3_600)   # 1-hour cache per symbol
+_strikes_cache: TTLCache = TTLCache(maxsize=150, ttl=3_600)   # strikes per symbol+expiry
+_chain_cache:   TTLCache = TTLCache(maxsize=100, ttl=3_600)   # full chain per symbol+expiry
+_events_cache:  TTLCache = TTLCache(maxsize=150, ttl=3_600)   # earnings/dividends per symbol
 
 
 def get_option_expiries(symbol: str) -> list:

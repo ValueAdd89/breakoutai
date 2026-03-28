@@ -130,7 +130,7 @@ def _build_dataset() -> tuple[np.ndarray, np.ndarray]:
     X_list, y_list = [], []
     for sym in TRAINING_SYMBOLS:
         try:
-            df = yf.Ticker(sym).history(period="2y", auto_adjust=True)
+            df = yf.Ticker(sym).history(period="1y", auto_adjust=True)
             if df.empty or len(df) < 100:
                 continue
             df.columns = [c.lower() for c in df.columns]
@@ -143,12 +143,15 @@ def _build_dataset() -> tuple[np.ndarray, np.ndarray]:
                 label = 1 if (future_max - df["close"].iloc[i]) / (df["close"].iloc[i] + 1e-9) >= BREAKOUT_PCT else 0
                 X_list.append(feat)
                 y_list.append(label)
+            del df  # free per-symbol DataFrame after feature extraction
             logger.info(f"Built features for {sym} — {len(X_list)} samples total")
         except Exception as e:
             logger.warning(f"Dataset error {sym}: {e}")
     if len(X_list) < 100:
         raise RuntimeError("Insufficient training data collected")
-    return np.array(X_list), np.array(y_list)
+    X, y = np.array(X_list), np.array(y_list)
+    del X_list, y_list  # free lists before model training
+    return X, y
 
 
 def train_model(force: bool = False) -> Pipeline:

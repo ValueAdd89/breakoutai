@@ -170,7 +170,7 @@ def load_scan_results() -> tuple[list[dict], Optional[str]]:
                 scanned_at TEXT NOT NULL
             )""")
             rows = c.execute(
-                "SELECT payload, scanned_at FROM scan_results ORDER BY id ASC"
+                "SELECT payload, scanned_at FROM scan_results ORDER BY id ASC LIMIT 200"
             ).fetchall()
     except Exception:
         return [], None

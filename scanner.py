@@ -57,7 +57,7 @@ _alert_callbacks: list[Callable] = []
 _results_loaded_from_db: bool = False
 
 # Throttle: max parallel yfinance requests (be a good citizen)
-_MAX_WORKERS = 20
+_MAX_WORKERS = 10
 # How many top results to keep in memory
 _TOP_N = 200
 
@@ -489,6 +489,7 @@ def _run_full_scan() -> None:
         # ── Sort and store top N ──────────────────────────────────────────────
         batch_results.sort(key=lambda x: x["confidence"], reverse=True)
         top = batch_results[:_TOP_N]
+        del batch_results  # release the full results list immediately
 
         with _results_lock:
             _results.clear()
@@ -499,6 +500,8 @@ def _run_full_scan() -> None:
             db.save_scan_results(top)
         except Exception as e:
             logger.warning(f"Could not persist scan results: {e}")
+        finally:
+            del top  # free after persisting
 
         _last_scan_time = datetime.now(timezone.utc)
         elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(_scan_progress["started_at"])).seconds
