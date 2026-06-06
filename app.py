@@ -2089,6 +2089,157 @@ def _flow_narrative_html(
             "Avoid positions based solely on aggregate C/P ratio when it's near 1."
         )
 
+    # ── DTE Recommendation ────────────────────────────────────────────────────
+    # Weight DTE by dollar premium — where is conviction actually concentrated?
+    weighted_dte = (
+        (disp["dte"] * disp["dollar_premium"]).sum() / max(disp["dollar_premium"].sum(), 1)
+        if not disp.empty else 30.0
+    )
+    # Unusual contracts carry extra conviction — blend their avg DTE at 2x weight
+    unusual_sub = disp[disp["unusual"]] if not disp.empty and "unusual" in disp.columns else pd.DataFrame()
+    unusual_dte = unusual_sub["dte"].mean() if not unusual_sub.empty else weighted_dte
+    conviction_dte = (unusual_dte * 2 + weighted_dte) / 3
+
+    is_bull_flow = cp_ratio >= 1.3
+    is_bear_flow = cp_ratio <= 0.77
+
+    if conviction_dte <= 2:
+        dte_label    = "0 – 2 DTE"
+        dte_color    = "#F23645"
+        dte_bg       = "rgba(242,54,69,0.07)"
+        dte_border   = "rgba(242,54,69,0.22)"
+        if is_bull_flow:
+            dte_strategy = "Buy ATM Call — match the short-dated call flow"
+            dte_detail   = "Buy at-the-money or 1 strike OTM call. Match the DTE of the largest unusual print."
+        elif is_bear_flow:
+            dte_strategy = "Buy ATM Put — match the short-dated put flow"
+            dte_detail   = "Buy at-the-money or 1 strike OTM put. Match the DTE of the largest unusual print."
+        else:
+            dte_strategy = "Buy ATM Straddle — big move expected, direction unclear"
+            dte_detail   = "Buy both an ATM call and put same expiry. Profitable if the move is large enough to cover both premiums."
+        dte_why  = (
+            f"The bulk of unusual flow sits in contracts expiring in {conviction_dte:.0f} day(s) or less. "
+            "Short-dated options are expensive — buying them means you expect the move <strong>today or tomorrow</strong>. "
+            "These traders are not hedging; they're making a leveraged directional bet. Following the DTE is as important as following the direction."
+        )
+        dte_risk = (
+            "Maximum risk = premium paid (defined). Hard exit rules: close at 50% loss if wrong, "
+            "take 50% off the table at 75% profit and let the rest run. "
+            "0–2 DTE options go to zero fast — never average down."
+        )
+        dte_entry = (
+            "Enter within the first 30 min for pre-market flow, or on the first break of a key technical level. "
+            "Every hour of theta decay costs you dearly at this DTE — don't wait for a perfect entry."
+        )
+    elif conviction_dte <= 10:
+        dte_label    = "Weekly (5 – 7 DTE)"
+        dte_color    = "#00C805"
+        dte_bg       = "rgba(0,200,5,0.07)"
+        dte_border   = "rgba(0,200,5,0.22)"
+        if is_bull_flow:
+            dte_strategy = "Buy Call Debit Spread — bullish, defined risk"
+            dte_detail   = "Buy ATM call, sell 3–5% OTM call same expiry. Captures upside at ~40% the cost of a naked call."
+        elif is_bear_flow:
+            dte_strategy = "Buy Put Debit Spread — bearish, defined risk"
+            dte_detail   = "Buy ATM put, sell 3–5% OTM put same expiry. Captures downside at ~40% the cost of a naked put."
+        else:
+            dte_strategy = "Follow the single largest unusual print — buy its DTE and direction"
+            dte_detail   = "Mixed aggregate bias: trust the individual sweep over the aggregate. Match that contract's expiry."
+        dte_why  = (
+            f"Flow is weighted toward ~{conviction_dte:.0f}-day contracts — the sweet spot for directional plays. "
+            "Weekly flow tells you the move is expected <strong>this week</strong>. "
+            "A debit spread matches the risk profile of informed flow: defined loss, leveraged upside."
+        )
+        dte_risk = (
+            "Time stop: if the position hasn't moved 30% in your favor by day 3, close it. "
+            "The flow conviction fades as the original contracts near expiry — "
+            "don't hold a weekly play looking for a monthly-sized move."
+        )
+        dte_entry = (
+            "Enter same day as the flow print for maximum alignment. "
+            "A spread 1 strike OTM gives a better R:R than ATM if the stock already moved on the print."
+        )
+    elif conviction_dte <= 35:
+        dte_label    = "Monthly (3 – 5 weeks)"
+        dte_color    = "#0a84ff"
+        dte_bg       = "rgba(10,132,255,0.07)"
+        dte_border   = "rgba(10,132,255,0.22)"
+        if is_bull_flow:
+            dte_strategy = "Buy Call Debit Spread or Long Call"
+            dte_detail   = "Monthly debit spread: buy ATM call, sell 7–10% OTM call. Long call if you want full upside."
+        elif is_bear_flow:
+            dte_strategy = "Buy Put Debit Spread or Long Put"
+            dte_detail   = "Monthly debit spread: buy ATM put, sell 7–10% OTM put. Long put if you want full downside."
+        else:
+            dte_strategy = "Focus on 1–2 highest-conviction individual prints, match their DTE exactly"
+            dte_detail   = "Mixed aggregate + monthly DTE = likely institutional hedging. Follow specific sweeps, ignore the aggregate C/P."
+        dte_why  = (
+            f"Flow is concentrated around {conviction_dte:.0f} DTE — monthly positioning. "
+            "Monthly flow often represents smarter money: they're paying for time because the thesis takes <strong>weeks</strong> to develop. "
+            "Give yourself the same runway they're buying."
+        )
+        dte_risk = (
+            "Close at 50% profit or 21 DTE remaining — whichever comes first. "
+            "Don't chase: if the stock already moved 5%+ on the day of the print, wait for a pullback."
+        )
+        dte_entry = (
+            "More flexibility here — wait for a technical setup to align with the flow direction. "
+            "Scale in: 60% on initial signal, 40% on first pullback. "
+            "Monthly options forgive early entries; weeklies don't."
+        )
+    else:
+        dte_label    = "Caution — Likely Institutional Hedging"
+        dte_color    = "#eab308"
+        dte_bg       = "rgba(234,179,8,0.07)"
+        dte_border   = "rgba(234,179,8,0.22)"
+        dte_strategy = "Don't mirror blindly — use LEAPS debit spreads if directional"
+        dte_detail   = "Buy deep ITM LEAPS (6–12 months), sell 15–20% OTM same expiry. Low theta burn, full directional exposure."
+        dte_why  = (
+            f"Average conviction DTE is {conviction_dte:.0f} days — very long-dated. "
+            "This is almost certainly institutional: hedging equity books, writing covered calls, "
+            "or long-term risk management. Retail traders who follow long-dated institutional flow "
+            "often get the direction right but the timing wrong, bleeding premium for months."
+        )
+        dte_risk = (
+            "Only follow if the flow coincides with a near-term catalyst (earnings, macro event, product launch). "
+            "Otherwise treat as a background sentiment signal, not a same-week trade."
+        )
+        dte_entry = (
+            "If you trade it, use a LEAPS spread to reduce premium cost and vega drag. "
+            "Set a 6-month calendar reminder to re-evaluate — this thesis plays out slowly."
+        )
+
+    dte_block = f"""
+  <div style="margin-top:18px;background:{dte_bg};border:1px solid {dte_border};
+              border-radius:12px;padding:18px 20px;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+      <div style="font-size:0.6rem;font-weight:700;color:rgba(255,255,255,0.35);
+                  letter-spacing:0.09em;text-transform:uppercase;">⏱ DTE Recommendation</div>
+      <span style="background:{dte_color}33;border:1px solid {dte_color}99;color:{dte_color};
+                   font-size:0.82rem;font-weight:800;padding:4px 16px;border-radius:20px;">{dte_label}</span>
+      <span style="font-size:0.78rem;font-weight:600;color:{dte_color};">{dte_strategy}</span>
+    </div>
+    <p style="font-size:0.76rem;color:rgba(255,255,255,0.45);margin:0 0 14px 0;
+              font-style:italic;">{dte_detail}</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
+      <div>
+        <div style="font-size:0.56rem;color:rgba(255,255,255,0.28);text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:5px;">Why this DTE</div>
+        <p style="font-size:0.77rem;color:rgba(255,255,255,0.68);margin:0;line-height:1.55;">{dte_why}</p>
+      </div>
+      <div>
+        <div style="font-size:0.56rem;color:rgba(255,255,255,0.28);text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:5px;">Risk Management</div>
+        <p style="font-size:0.77rem;color:rgba(255,255,255,0.68);margin:0;line-height:1.55;">{dte_risk}</p>
+      </div>
+      <div>
+        <div style="font-size:0.56rem;color:rgba(255,255,255,0.28);text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:5px;">Entry Timing</div>
+        <p style="font-size:0.77rem;color:rgba(255,255,255,0.68);margin:0;line-height:1.55;">{dte_entry}</p>
+      </div>
+    </div>
+  </div>"""
+
     return f"""
 <div style="background:rgba(8,12,18,0.9);border:1px solid rgba(255,255,255,0.07);
             border-radius:16px;padding:22px 24px;margin-bottom:20px;">
@@ -2139,7 +2290,7 @@ def _flow_narrative_html(
     <p style="color:rgba(255,255,255,0.72);font-size:0.82rem;
               line-height:1.6;margin:0;">{trade_impl}</p>
   </div>
-
+{dte_block}
 </div>
 """
 
@@ -2552,6 +2703,255 @@ def _gex_narrative_html(
             "that blow through short strikes."
         )
 
+    # ── DTE Recommendation ────────────────────────────────────────────────────
+    flip_dist_v  = abs(flip - spot) / spot * 100 if flip else 999.0
+    king_dist_v  = min((abs(k - spot) / spot * 100 for k in king_nodes), default=999.0) if king_nodes else 999.0
+    resist_str   = f"${resistance:.2f}" if resistance else "N/A"
+    support_str  = f"${support:.2f}"   if support   else "N/A"
+
+    if is_long:
+        if king_dist_v < 1.5 or flip_dist_v < 1.5:
+            dte_label    = "0 DTE"
+            dte_color    = "#F23645"
+            dte_bg       = "rgba(242,54,69,0.07)"
+            dte_border   = "rgba(242,54,69,0.22)"
+            dte_strategy = "Sell Iron Condor — collect premium while the pin holds"
+            dte_detail   = (
+                f"Sell OTM call above {resist_str} + OTM put below {support_str}. "
+                "Buy further-OTM wings for defined risk. Target 1/3 width as credit."
+            )
+            dte_why = (
+                f"Spot is within 1.5% of a King Node or the flip level — price is pinned. "
+                "In Long Gamma with this much concentration, dealers buy every dip and sell every rip all day. "
+                "0DTE strangle sellers capture maximum theta decay while the pin holds. "
+                "This is the textbook Long Gamma trade."
+            )
+            dte_risk = (
+                "Use an iron condor (not a naked strangle): buy wings 5–8% OTM for protection. "
+                "Close at 50% of max credit — don't hold to expiry. "
+                "Exit immediately on high-volume break of a King Node; the pin has broken."
+            )
+            dte_entry = (
+                "Wait 30–60 min after open for the intraday range to establish. "
+                "Place short call strike at or just above GEX resistance, "
+                "short put strike at or just below GEX support."
+            )
+        elif flip_dist_v < 3.0:
+            dte_label    = "2 DTE"
+            dte_color    = "#ff9f0a"
+            dte_bg       = "rgba(255,159,10,0.07)"
+            dte_border   = "rgba(255,159,10,0.22)"
+            dte_strategy = "Buy Debit Spread — directional toward the flip"
+            dte_detail   = (
+                f"Buy ATM call/put, sell one strike OTM same direction. "
+                f"Target: flip level at ${flip:.2f}."
+            )
+            dte_why = (
+                f"The flip level is {flip_dist_v:.1f}% away — could breach in 1–2 sessions. "
+                "Long Gamma still suppresses moves today, but the setup for a regime change is near. "
+                "A 2DTE debit spread captures the flip break with defined risk and "
+                "enough time to be right without overpaying for theta."
+            )
+            dte_risk = (
+                "Defined risk = net debit paid. Close at 50% loss — don't hold. "
+                "If the flip is not breached by end of day 1, take off 50% of the position. "
+                "This trade needs the catalyst to arrive within 48 hours."
+            )
+            dte_entry = (
+                f"Wait for {symbol} to test the flip level (${flip:.2f if flip else 0:.2f}), "
+                "then enter on the first pullback after it's tagged, not before. "
+                "Chasing before the test means paying up for a move that may not materialise."
+            )
+        elif flip_dist_v < 7.0:
+            dte_label    = "Weekly (5 – 7 DTE)"
+            dte_color    = "#00C805"
+            dte_bg       = "rgba(0,200,5,0.07)"
+            dte_border   = "rgba(0,200,5,0.22)"
+            dte_strategy = "Sell Credit Spread at the GEX walls"
+            dte_detail   = (
+                f"Sell call spread above {resist_str} + put spread below {support_str}. "
+                "Keep credit received > 1/3 of spread width."
+            )
+            dte_why = (
+                f"Flip is {flip_dist_v:.1f}% away — safely out of range for the week. "
+                "Long Gamma will suppress volatility all week, making credit spreads at the "
+                "GEX walls positive expected value. Five days of theta decay in your favor "
+                "while dealer hedging keeps price range-bound."
+            )
+            dte_risk = (
+                "Close the full position at 50% of max profit — don't hold to expiry. "
+                "Roll or close if spot approaches within 0.5% of either short strike. "
+                "Hard stop: if the flip level is breached intraday and holds for 2 hours, close defensively."
+            )
+            dte_entry = (
+                "Enter Monday or Tuesday for same-week Friday expiry. "
+                f"Short call just above {resist_str}, short put just below {support_str}. "
+                "Avoid entering after a large gap — elevated IV from the gap distorts your credit."
+            )
+        else:
+            dte_label    = "Monthly (21 – 30 DTE)"
+            dte_color    = "#0a84ff"
+            dte_bg       = "rgba(10,132,255,0.07)"
+            dte_border   = "rgba(10,132,255,0.22)"
+            dte_strategy = "Iron Condor or Butterfly centred at the dominant King Node"
+            dte_detail   = (
+                f"For an iron condor: sell call spread above {resist_str}, put spread below {support_str}. "
+                "For a butterfly: place the body at the King Node with wings at the walls."
+            )
+            dte_why = (
+                f"Flip is {flip_dist_v:.1f}% away — Long Gamma is entrenched for weeks. "
+                "Monthly premium sellers have two edges here: (1) Long Gamma suppresses realised vol "
+                "below implied vol → selling IV is positive EV; "
+                "(2) 21–30 DTE maximises theta decay with manageable gamma risk. "
+                "A butterfly at the dominant King Node directly exploits the pinning force."
+            )
+            dte_risk = (
+                "Take off the trade at 50% of max profit or 21 DTE remaining — whichever comes first. "
+                "The flip level is your hard stop: breached and held for 2+ sessions = regime changed, "
+                "your premium-selling thesis is invalid. Close and re-evaluate."
+            )
+            dte_entry = (
+                "Enter mid-month with 21–30 DTE. "
+                "Confirm the dominant King Node aligns with a technical level (VWAP, prior support/resistance) "
+                "for extra conviction. Size at 2–3% of account — premium selling is a frequency game, not concentration."
+            )
+    else:  # Short Gamma
+        if flip_dist_v < 2.0:
+            dte_label    = "0 DTE"
+            dte_color    = "#F23645"
+            dte_bg       = "rgba(242,54,69,0.07)"
+            dte_border   = "rgba(242,54,69,0.22)"
+            dte_strategy = "Buy ATM Call or Put — directional, high velocity"
+            dte_detail   = (
+                "Buy at-the-money option in the direction of the current move. "
+                "Size down to 0.5% of account — this is maximum leverage territory."
+            )
+            dte_why = (
+                "Short Gamma + flip within 2% = the highest-velocity setup in options. "
+                "Dealer hedging is amplifying every tick right now. "
+                "A 0DTE directional call or put captures the gamma squeeze at maximum leverage — "
+                "small underlying moves produce outsized options P&L in the first hour."
+            )
+            dte_risk = (
+                "Hard rules: close at 50% loss, take 50% off at 100% profit, and let the rest run. "
+                "Never hold a 0DTE long through a reversal — they go to zero before you react. "
+                "Size at 0.25–0.5% of account. This is a scalp, not a swing."
+            )
+            dte_entry = (
+                "Wait for a key level to break first (King Node, prior high/low). "
+                "Enter on the candle immediately after the break — not before. "
+                "The re-test of the broken level is a second valid entry if you missed the first."
+            )
+        elif flip_dist_v < 5.0:
+            dte_label    = "2 DTE"
+            dte_color    = "#ff9f0a"
+            dte_bg       = "rgba(255,159,10,0.07)"
+            dte_border   = "rgba(255,159,10,0.22)"
+            dte_strategy = "Buy Debit Spread — directional, defined risk"
+            dte_detail   = (
+                "Buy ATM, sell one strike OTM in the same direction. "
+                f"Target: next GEX wall ({resist_str} for calls, {support_str} for puts)."
+            )
+            dte_why = (
+                f"Short Gamma with flip {flip_dist_v:.1f}% away. "
+                "Moves are being amplified but the thesis needs 1–2 days to fully develop. "
+                "A 2DTE debit spread gives directional exposure with defined risk and "
+                "still captures the amplified gamma environment without the extreme theta decay of 0DTE."
+            )
+            dte_risk = (
+                "Hard stop at 50% of premium paid. If the trade hasn't moved in your direction "
+                "by end of day 1, close it — Short Gamma moves have a short window before "
+                "the regime resolves or reverses. Do not hold past day 2."
+            )
+            dte_entry = (
+                f"Enter after a confirmed break of GEX resistance ({resist_str}) for calls "
+                f"or GEX support ({support_str}) for puts — ideally on a re-test of the broken level. "
+                "Confirm with volume expansion. A breakout on thin volume in Short Gamma is a trap."
+            )
+        elif flip_dist_v < 10.0:
+            dte_label    = "Weekly (5 – 7 DTE)"
+            dte_color    = "#00C805"
+            dte_bg       = "rgba(0,200,5,0.07)"
+            dte_border   = "rgba(0,200,5,0.22)"
+            dte_strategy = "Buy Debit Spread or Long Call/Put — ride the trend"
+            dte_detail   = (
+                f"Outright call/put if high conviction. Debit spread to reduce cost. "
+                f"Target next GEX wall: {resist_str} (calls) / {support_str} (puts)."
+            )
+            dte_why = (
+                f"Short Gamma, flip {flip_dist_v:.1f}% away — trending conditions, "
+                "but the move needs a few sessions to develop. Weekly options balance "
+                "directional leverage with enough time to be right. "
+                "The GEX walls above and below are your realistic targets for the week."
+            )
+            dte_risk = (
+                "Time stop: close by day 4 if the position hasn't moved 50% in your favor. "
+                "Trail your stop behind each new King Node broken. "
+                "Never sell premium in Short Gamma — amplified moves will run through your short strikes."
+            )
+            dte_entry = (
+                "Buy pullbacks to King Nodes or prior breakout points. "
+                "In Short Gamma, dealer amplification reasserts after each countertrend move — "
+                "dips are buyable (bullish) and rips are shortable (bearish)."
+            )
+        else:
+            dte_label    = "Monthly (21 – 30 DTE)"
+            dte_color    = "#0a84ff"
+            dte_bg       = "rgba(10,132,255,0.07)"
+            dte_border   = "rgba(10,132,255,0.22)"
+            dte_strategy = "Buy Debit Spread — give the trend room to breathe"
+            dte_detail   = (
+                "Buy ATM, sell 7–10% OTM same direction. "
+                "Wide spread captures the full trend without excessive theta burn."
+            )
+            dte_why = (
+                f"Short Gamma but flip is {flip_dist_v:.1f}% away — the regime is trending "
+                "but there's a long distance to travel. Monthly options let theta work "
+                "slowly while the trend develops. Weekly DTE here means bleeding premium "
+                "waiting for a slow-moving setup."
+            )
+            dte_risk = (
+                "Close at 50% profit or 21 DTE remaining. Scale in — 50% now, 50% on first pullback. "
+                "A sustained reclaim of the flip level in the wrong direction means the trend is reversing — "
+                "close the position immediately, don't average into a regime change."
+            )
+            dte_entry = (
+                "Enter on first trend confirmation: break of a King Node on above-average volume. "
+                "Monthly entries have more forgiveness — wait for a better price on the pullback "
+                "rather than chasing the initial move."
+            )
+
+    dte_block = f"""
+  <div style="margin-top:18px;background:{dte_bg};border:1px solid {dte_border};
+              border-radius:12px;padding:18px 20px;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+      <div style="font-size:0.6rem;font-weight:700;color:rgba(255,255,255,0.35);
+                  letter-spacing:0.09em;text-transform:uppercase;">⏱ DTE Recommendation</div>
+      <span style="background:{dte_color}33;border:1px solid {dte_color}99;color:{dte_color};
+                   font-size:0.82rem;font-weight:800;padding:4px 16px;border-radius:20px;">{dte_label}</span>
+      <span style="font-size:0.78rem;font-weight:600;color:{dte_color};">{dte_strategy}</span>
+    </div>
+    <p style="font-size:0.76rem;color:rgba(255,255,255,0.45);margin:0 0 14px 0;
+              font-style:italic;">{dte_detail}</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
+      <div>
+        <div style="font-size:0.56rem;color:rgba(255,255,255,0.28);text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:5px;">Why this DTE</div>
+        <p style="font-size:0.77rem;color:rgba(255,255,255,0.68);margin:0;line-height:1.55;">{dte_why}</p>
+      </div>
+      <div>
+        <div style="font-size:0.56rem;color:rgba(255,255,255,0.28);text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:5px;">Risk Management</div>
+        <p style="font-size:0.77rem;color:rgba(255,255,255,0.68);margin:0;line-height:1.55;">{dte_risk}</p>
+      </div>
+      <div>
+        <div style="font-size:0.56rem;color:rgba(255,255,255,0.28);text-transform:uppercase;
+                    letter-spacing:0.08em;margin-bottom:5px;">Entry Timing</div>
+        <p style="font-size:0.77rem;color:rgba(255,255,255,0.68);margin:0;line-height:1.55;">{dte_entry}</p>
+      </div>
+    </div>
+  </div>"""
+
     return f"""
 <div style="background:rgba(8,12,18,0.9);border:1px solid rgba(255,255,255,0.07);
             border-radius:16px;padding:22px 24px;margin-bottom:20px;">
@@ -2612,7 +3012,7 @@ def _gex_narrative_html(
     <p style="color:rgba(255,255,255,0.72);font-size:0.82rem;
               line-height:1.6;margin:0;">{trade_impl}</p>
   </div>
-
+{dte_block}
 </div>
 """
 
