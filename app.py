@@ -24,6 +24,14 @@ import scanner
 from ml_model import is_model_trained, train_model
 from alerts import send_test_email
 from data_engine import get_price_data
+from options_engine import (
+    fetch_options_chain,
+    compute_gex_profile,
+    compute_vex_profile,
+    get_key_levels,
+    scan_unusual_flow,
+    FLOW_SYMBOLS,
+)
 
 
 @st.cache_data(ttl=600)
@@ -1015,13 +1023,15 @@ st.markdown(
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-t1, t2, t3, t4, t5, t6 = st.tabs([
+t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
     "📊  Scanner",
     "⏱  Expiry Signals",
     "🔔  Alerts",
     "📈  Chart",
-    "🌡  Heatmap",
+    "🔥  Market Map",
     "🤖  Model",
+    "⚡  Flowseeker",
+    "🌡  Heatseeker",
 ])
 
 
@@ -1906,3 +1916,625 @@ distance from 52-week high, OBV slope, BB width
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 7 — FLOWSEEKER  (institutional options flow scanner)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_flow_scan(syms_key: str, min_prem: float) -> pd.DataFrame:
+    syms = [s.strip() for s in syms_key.split(",") if s.strip()] if syms_key else None
+    return scan_unusual_flow(syms, min_premium=min_prem, min_vol=50)
+
+
+def _flow_table_html(df: pd.DataFrame) -> str:
+    """Render the options flow tape as a dark HTML table."""
+    if df.empty:
+        return (
+            '<div style="color:rgba(255,255,255,0.3);text-align:center;padding:32px 0;">'
+            "No unusual flow matched your filters.</div>"
+        )
+
+    th = (
+        "padding:10px 14px;text-align:left;color:rgba(255,255,255,0.38);"
+        "font-weight:600;font-size:0.64rem;letter-spacing:0.07em;text-transform:uppercase;"
+    )
+    rows_html = ""
+    for _, r in df.iterrows():
+        is_call = r["type"] == "CALL"
+        tc  = "#00C805" if is_call else "#F23645"
+        otm = r["otm_pct"]
+        otm_str = f'+{otm:.1f}%' if otm >= 0 else f'{otm:.1f}%'
+        unusual_badge = (
+            '<span style="background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.3);'
+            'color:#eab308;font-size:0.58rem;padding:1px 6px;border-radius:8px;margin-left:4px;">UNUSUAL</span>'
+            if r["unusual"] else ""
+        )
+        dp_m = r["dollar_premium"] / 1_000
+        dp_str = f"${dp_m:,.0f}k" if dp_m < 1000 else f"${dp_m/1000:.1f}M"
+        rows_html += (
+            f'<tr style="border-bottom:1px solid rgba(255,255,255,0.04);transition:background 0.15s;"'
+            f' onmouseover="this.style.background=\'rgba(255,255,255,0.025)\'"'
+            f' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:10px 14px;font-weight:700;color:#fff;">{r["symbol"]}{unusual_badge}</td>'
+            f'<td style="padding:10px 10px;">'
+            f'<span style="background:{tc}22;border:1px solid {tc}55;color:{tc};'
+            f'font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:6px;">{r["type"]}</span>'
+            f'</td>'
+            f'<td style="padding:10px 10px;font-family:\'JetBrains Mono\',monospace;color:#fff;">'
+            f'${r["strike"]:.1f}</td>'
+            f'<td style="padding:10px 10px;color:rgba(255,255,255,0.5);">{r["expiry"]}</td>'
+            f'<td style="padding:10px 10px;color:rgba(255,255,255,0.5);">{r["dte"]}d</td>'
+            f'<td style="padding:10px 10px;color:#fff;font-weight:600;">{r["volume"]:,}</td>'
+            f'<td style="padding:10px 10px;color:rgba(255,255,255,0.45);">{r["oi"]:,}</td>'
+            f'<td style="padding:10px 10px;color:#eab308;">{r["iv"]:.1f}%</td>'
+            f'<td style="padding:10px 10px;color:#fff;">${r["premium"]:.2f}</td>'
+            f'<td style="padding:10px 10px;font-weight:700;color:{tc};">{dp_str}</td>'
+            f'<td style="padding:10px 10px;color:{"#eab308" if r["vol_oi"] > 1 else "rgba(255,255,255,0.45)"};">'
+            f'{r["vol_oi"]:.2f}x</td>'
+            f'<td style="padding:10px 14px;color:{"#00C805" if otm >= 0 else "#F23645"};">{otm_str}</td>'
+            f'</tr>'
+        )
+
+    return (
+        '<div style="overflow-x:auto;max-height:580px;overflow-y:auto;'
+        'background:#0A0A0D;border:1px solid rgba(255,255,255,0.06);border-radius:14px;">'
+        '<table style="width:100%;border-collapse:collapse;font-size:0.84rem;">'
+        '<thead><tr style="position:sticky;top:0;background:#0A0A0D;z-index:2;'
+        'border-bottom:1px solid rgba(255,255,255,0.07);">'
+        f'<th style="{th}">Symbol</th>'
+        f'<th style="{th}">Type</th>'
+        f'<th style="{th}">Strike</th>'
+        f'<th style="{th}">Expiry</th>'
+        f'<th style="{th}">DTE</th>'
+        f'<th style="{th}">Volume</th>'
+        f'<th style="{th}">OI</th>'
+        f'<th style="{th}">IV%</th>'
+        f'<th style="{th}">Mid</th>'
+        f'<th style="{th}">Total$</th>'
+        f'<th style="{th}">Vol/OI</th>'
+        f'<th style="{th}">OTM%</th>'
+        '</tr></thead>'
+        f'<tbody style="background:#050507;">{rows_html}</tbody>'
+        '</table></div>'
+    )
+
+
+with t7:
+    st.markdown(
+        '<div style="padding:4px 0 20px;">'
+        '<div style="font-size:0.88rem;color:rgba(255,255,255,0.45);max-width:700px;">'
+        'Real-time institutional options flow scanner — captures unusual activity (high volume, '
+        'large premium, elevated Vol/OI) across the most-active options tickers. '
+        'Data sourced live from yfinance options chains.'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    fs_c1, fs_c2, fs_c3, fs_c4 = st.columns([3, 1, 1, 1])
+    with fs_c1:
+        fs_custom = st.text_input(
+            "Symbols (comma-separated, or leave blank for top 20)",
+            placeholder="e.g. AAPL, TSLA, SPY",
+            key="fs_syms",
+        )
+    with fs_c2:
+        prem_label = st.selectbox("Min Premium", ["$10k", "$25k", "$50k", "$100k", "$250k"], index=1, key="fs_prem")
+        prem_map   = {"$10k": 10_000, "$25k": 25_000, "$50k": 50_000, "$100k": 100_000, "$250k": 250_000}
+        fs_min_prem = prem_map[prem_label]
+    with fs_c3:
+        fs_type = st.selectbox("Type", ["All", "Calls only", "Puts only"], key="fs_type")
+    with fs_c4:
+        fs_unusual = st.checkbox("Unusual only", value=False, key="fs_unusual")
+
+    syms_key = (
+        ",".join(s.strip().upper() for s in fs_custom.split(",") if s.strip())
+        if fs_custom else ""
+    )
+
+    with st.spinner("Fetching options flow data… (first load ~20 s)"):
+        flow_df = _cached_flow_scan(syms_key, fs_min_prem)
+
+    if not flow_df.empty:
+        # Apply UI filters
+        disp = flow_df.copy()
+        if fs_type == "Calls only":
+            disp = disp[disp["type"] == "CALL"]
+        elif fs_type == "Puts only":
+            disp = disp[disp["type"] == "PUT"]
+        if fs_unusual:
+            disp = disp[disp["unusual"]]
+
+        # ── KPI bar ──────────────────────────────────────────────────────────
+        total_dp   = disp["dollar_premium"].sum()
+        call_dp    = disp[disp["type"] == "CALL"]["dollar_premium"].sum()
+        put_dp     = disp[disp["type"] == "PUT"]["dollar_premium"].sum()
+        cp_ratio   = call_dp / put_dp if put_dp > 0 else float("inf")
+        ratio_color = "#00C805" if cp_ratio > 1.2 else "#F23645" if cp_ratio < 0.8 else "#eab308"
+        bias_label = "Call-Heavy" if cp_ratio > 1.2 else "Put-Heavy" if cp_ratio < 0.8 else "Balanced"
+
+        fk1, fk2, fk3, fk4, fk5 = st.columns(5)
+        fk1.markdown(_kpi("Contracts", f"{len(disp):,}"), unsafe_allow_html=True)
+        fk2.markdown(
+            _kpi("Total Premium", f"${total_dp / 1e6:.2f}M"),
+            unsafe_allow_html=True,
+        )
+        fk3.markdown(
+            _kpi("Call Premium", f"${call_dp / 1e6:.2f}M", "#00C805"),
+            unsafe_allow_html=True,
+        )
+        fk4.markdown(
+            _kpi("Put Premium", f"${put_dp / 1e6:.2f}M", "#F23645"),
+            unsafe_allow_html=True,
+        )
+        fk5.markdown(
+            _kpi("C/P Bias", bias_label, ratio_color, f"ratio {cp_ratio:.2f}"),
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── Per-symbol summary pills ──────────────────────────────────────────
+        sym_groups = (
+            disp.groupby("symbol")
+            .agg(
+                total_prem=("dollar_premium", "sum"),
+                call_prem=("dollar_premium", lambda x: x[disp.loc[x.index, "type"] == "CALL"].sum()),
+                contracts=("symbol", "count"),
+            )
+            .sort_values("total_prem", ascending=False)
+        )
+
+        pills_html = ""
+        for sym, row2 in sym_groups.head(12).iterrows():
+            tp  = row2["total_prem"]
+            tp_str = f"${tp / 1e6:.1f}M" if tp >= 1e6 else f"${tp / 1e3:.0f}k"
+            cp2 = row2["call_prem"]
+            bias_c = "#00C805" if cp2 > tp * 0.55 else "#F23645" if cp2 < tp * 0.45 else "#eab308"
+            pills_html += (
+                f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);'
+                f'border-radius:10px;padding:10px 14px;text-align:center;">'
+                f'<div style="font-size:0.95rem;font-weight:800;color:#fff;">{sym}</div>'
+                f'<div style="font-size:0.9rem;font-weight:700;color:{bias_c};margin-top:2px;">{tp_str}</div>'
+                f'<div style="font-size:0.6rem;color:rgba(255,255,255,0.3);margin-top:2px;">'
+                f'{int(row2["contracts"])} contracts</div>'
+                f'</div>'
+            )
+
+        st.markdown(
+            f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));'
+            f'gap:8px;margin-bottom:20px;">{pills_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Flow tape table ───────────────────────────────────────────────────
+        st.markdown(
+            f'<div class="section-header">'
+            f'<span class="section-title">Live Flow Tape</span>'
+            f'<span class="section-count">{len(disp):,} prints · sorted by premium</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(_flow_table_html(disp.head(200)), unsafe_allow_html=True)
+
+        # ── Plotly premium-by-symbol bar chart ───────────────────────────────
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.expander("Premium distribution by ticker"):
+            fig_flow = go.Figure()
+            for opt_type, color in [("CALL", "#00C805"), ("PUT", "#F23645")]:
+                sub = disp[disp["type"] == opt_type].groupby("symbol")["dollar_premium"].sum() / 1e6
+                sub = sub.sort_values(ascending=False).head(15)
+                fig_flow.add_trace(go.Bar(
+                    x=sub.index.tolist(),
+                    y=sub.values.tolist(),
+                    name=opt_type,
+                    marker_color=color,
+                    opacity=0.8,
+                ))
+            fig_flow.update_layout(
+                barmode="group",
+                paper_bgcolor="#050507",
+                plot_bgcolor="#0A0A0D",
+                height=320,
+                font=dict(color="rgba(255,255,255,0.6)"),
+                yaxis_title="Premium ($M)",
+                legend=dict(bgcolor="#0A0A0D", bordercolor="rgba(255,255,255,0.07)"),
+                margin=dict(l=8, r=8, t=16, b=8),
+            )
+            fig_flow.update_yaxes(gridcolor="rgba(255,255,255,0.05)")
+            fig_flow.update_xaxes(gridcolor="rgba(255,255,255,0.03)")
+            st.plotly_chart(fig_flow, use_container_width=True)
+
+    else:
+        st.markdown(
+            '<div style="background:#0C0C10;border:1px solid rgba(255,255,255,0.06);'
+            'border-radius:14px;padding:40px 20px;text-align:center;">'
+            '<div style="font-size:2rem;margin-bottom:12px;">📭</div>'
+            '<div style="color:rgba(255,255,255,0.5);font-size:0.95rem;">'
+            'No options flow data returned.</div>'
+            '<div style="color:rgba(255,255,255,0.35);font-size:0.82rem;margin-top:6px;">'
+            'Try lowering the minimum premium, or check your internet connection.</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    fs_r1, fs_r2 = st.columns([3, 1])
+    with fs_r2:
+        if st.button("↺ Refresh Flow", key="fs_refresh", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+    st.markdown(
+        '<div style="font-size:0.68rem;color:rgba(255,255,255,0.2);margin-top:12px;">'
+        'Data from yfinance options chains · cached 5 min · '
+        'Unusual = Vol/OI ≥ 0.5 or Volume ≥ 1,000 or Premium ≥ $100k · '
+        'Educational use only — not financial advice.</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 8 — HEATSEEKER  (GEX / VEX dealer-positioning heatmap)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_heatseeker(symbol: str):
+    chain, spot = fetch_options_chain(symbol)
+    if chain is None or spot <= 0:
+        return None, 0.0, pd.DataFrame(), pd.DataFrame(), {}
+    gex    = compute_gex_profile(chain, spot)
+    vex    = compute_vex_profile(chain, spot)
+    levels = get_key_levels(gex, spot)
+    return chain, spot, gex, vex, levels
+
+
+HS_DEFAULTS = ["SPY", "QQQ", "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "META", "AMD", "COIN"]
+
+with t8:
+    st.markdown(
+        '<div style="padding:4px 0 20px;">'
+        '<div style="font-size:0.88rem;color:rgba(255,255,255,0.45);max-width:700px;">'
+        'Heatseeker computes real Gamma Exposure (GEX) and Vanna Exposure (VEX) from live '
+        'options chains using Black-Scholes. Positive GEX = dealers are net long gamma '
+        '(suppresses volatility). Negative GEX = dealers are net short gamma (amplifies moves).'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    hs_c1, hs_c2, hs_c3 = st.columns([2, 2, 1])
+    with hs_c1:
+        hs_sym = st.selectbox("Symbol", HS_DEFAULTS, key="hs_sym")
+    with hs_c2:
+        hs_custom = st.text_input(
+            "Or enter any ticker",
+            placeholder="e.g. PLTR",
+            key="hs_custom",
+        ).upper().strip()
+    with hs_c3:
+        hs_range = st.slider("Strike range ±%", 5, 25, 12, key="hs_range")
+
+    hs_target = hs_custom if hs_custom else hs_sym
+
+    with st.spinner(f"Loading {hs_target} options chain (Black-Scholes greeks)…"):
+        chain, spot, gex, vex, levels = _cached_heatseeker(hs_target)
+
+    if chain is None or spot <= 0 or gex.empty:
+        st.error(
+            f"Could not fetch options data for **{hs_target}**. "
+            "The ticker may not have listed options or data is temporarily unavailable."
+        )
+    else:
+        regime      = levels.get("gex_regime", "Unknown")
+        total_gex   = levels.get("total_gex", 0.0)
+        flip        = levels.get("flip_level")
+        king_nodes  = levels.get("king_nodes", [])
+        resistance  = levels.get("resistance")
+        support     = levels.get("support")
+        regime_col  = "#00C805" if regime == "Long Gamma" else "#F23645"
+
+        # ── KPI row ──────────────────────────────────────────────────────────
+        hk1, hk2, hk3, hk4, hk5 = st.columns(5)
+        hk1.markdown(_kpi("Spot Price", f"${spot:.2f}"), unsafe_allow_html=True)
+        hk2.markdown(
+            _kpi("GEX Regime", regime, regime_col,
+                 "dealers long γ → vol suppressed" if regime == "Long Gamma"
+                 else "dealers short γ → moves amplified"),
+            unsafe_allow_html=True,
+        )
+        hk3.markdown(
+            _kpi("GEX Flip", f"${flip:.2f}" if flip else "—", "#eab308",
+                 "zero-crossing nearest spot"),
+            unsafe_allow_html=True,
+        )
+        hk4.markdown(
+            _kpi("Total GEX", f"{total_gex:+.1f}M", regime_col),
+            unsafe_allow_html=True,
+        )
+        hk5.markdown(
+            _kpi("Options Expiries", str(chain["expiry"].nunique()), "#fff"),
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── GEX profile chart ─────────────────────────────────────────────────
+        lo = spot * (1 - hs_range / 100)
+        hi = spot * (1 + hs_range / 100)
+        gex_near = gex[(gex["strike"] >= lo) & (gex["strike"] <= hi)].copy()
+
+        if not gex_near.empty:
+            pos_mask = gex_near["net_gex"] >= 0
+            neg_mask = ~pos_mask
+
+            fig_gex = go.Figure()
+
+            fig_gex.add_trace(go.Bar(
+                x=gex_near[pos_mask]["strike"].tolist(),
+                y=gex_near[pos_mask]["net_gex"].tolist(),
+                name="Net GEX (+)",
+                marker_color="#00C805",
+                opacity=0.75,
+            ))
+            fig_gex.add_trace(go.Bar(
+                x=gex_near[neg_mask]["strike"].tolist(),
+                y=gex_near[neg_mask]["net_gex"].tolist(),
+                name="Net GEX (−)",
+                marker_color="#F23645",
+                opacity=0.75,
+            ))
+
+            # Call vs Put GEX lines
+            fig_gex.add_trace(go.Scatter(
+                x=gex_near["strike"].tolist(),
+                y=gex_near["call_gex"].tolist(),
+                mode="lines",
+                name="Call GEX",
+                line=dict(color="rgba(0,200,5,0.45)", width=1.5, dash="dot"),
+            ))
+            fig_gex.add_trace(go.Scatter(
+                x=gex_near["strike"].tolist(),
+                y=(-gex_near["put_gex"]).tolist(),
+                mode="lines",
+                name="Put GEX",
+                line=dict(color="rgba(242,54,69,0.45)", width=1.5, dash="dot"),
+            ))
+
+            # Vertical reference lines
+            fig_gex.add_vline(
+                x=spot,
+                line_color="rgba(255,255,255,0.8)",
+                line_width=2,
+                annotation_text=f"  Spot ${spot:.2f}",
+                annotation_font_color="rgba(255,255,255,0.8)",
+            )
+            if flip:
+                fig_gex.add_vline(
+                    x=flip,
+                    line_color="#eab308",
+                    line_dash="dash",
+                    line_width=1.5,
+                    annotation_text=f"  Flip ${flip:.2f}",
+                    annotation_font_color="#eab308",
+                )
+            for i, node in enumerate(king_nodes[:3]):
+                fig_gex.add_vline(
+                    x=node,
+                    line_color="rgba(255,255,255,0.2)",
+                    line_dash="dot",
+                    line_width=1,
+                    annotation_text=f"  K{i+1}",
+                    annotation_font_color="rgba(255,255,255,0.3)",
+                    annotation_font_size=10,
+                )
+            if resistance:
+                fig_gex.add_vline(
+                    x=resistance,
+                    line_color="rgba(0,200,5,0.35)",
+                    line_dash="dash",
+                    line_width=1,
+                    annotation_text="  Resist",
+                    annotation_font_color="rgba(0,200,5,0.5)",
+                    annotation_font_size=10,
+                )
+            if support:
+                fig_gex.add_vline(
+                    x=support,
+                    line_color="rgba(242,54,69,0.35)",
+                    line_dash="dash",
+                    line_width=1,
+                    annotation_text="  Support",
+                    annotation_font_color="rgba(242,54,69,0.5)",
+                    annotation_font_size=10,
+                )
+
+            fig_gex.update_layout(
+                title=dict(
+                    text=f"{hs_target} — Gamma Exposure (GEX) by Strike",
+                    font=dict(color="rgba(255,255,255,0.85)", size=14),
+                ),
+                paper_bgcolor="#050507",
+                plot_bgcolor="#0A0A0D",
+                height=420,
+                barmode="relative",
+                font=dict(color="rgba(255,255,255,0.6)", family="DM Sans, sans-serif"),
+                xaxis=dict(
+                    gridcolor="rgba(255,255,255,0.04)",
+                    zeroline=False,
+                    tickprefix="$",
+                    title="Strike",
+                ),
+                yaxis=dict(
+                    gridcolor="rgba(255,255,255,0.04)",
+                    zeroline=True,
+                    zerolinecolor="rgba(255,255,255,0.15)",
+                    title="GEX ($M)",
+                ),
+                legend=dict(
+                    bgcolor="#0A0A0D",
+                    bordercolor="rgba(255,255,255,0.07)",
+                    orientation="h",
+                    y=-0.15,
+                ),
+                margin=dict(l=8, r=8, t=40, b=8),
+            )
+            st.plotly_chart(fig_gex, use_container_width=True)
+
+        # ── Key levels summary ────────────────────────────────────────────────
+        st.markdown(
+            f'<div class="section-header">'
+            f'<span class="section-title">Key Structural Levels</span>'
+            f'<span class="section-count">{hs_target} · computed from live options chain</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        lev_html = ""
+        def _lev(label, val, color, desc):
+            return (
+                f'<div style="background:rgba(12,12,16,0.7);border:1px solid rgba(255,255,255,0.06);'
+                f'border-left:3px solid {color};border-radius:12px;padding:14px 16px;">'
+                f'<div style="font-size:0.62rem;color:rgba(255,255,255,0.35);letter-spacing:0.08em;'
+                f'text-transform:uppercase;margin-bottom:4px;">{label}</div>'
+                f'<div style="font-size:1.3rem;font-weight:800;color:{color};">{val}</div>'
+                f'<div style="font-size:0.72rem;color:rgba(255,255,255,0.38);margin-top:4px;">{desc}</div>'
+                f'</div>'
+            )
+
+        lev_cards = [
+            _lev("GEX Regime", regime, regime_col,
+                 "Dealers are net long gamma — volatility suppressed" if regime == "Long Gamma"
+                 else "Dealers are net short gamma — moves amplified"),
+            _lev("Flip Level",
+                 f"${flip:.2f}" if flip else "—", "#eab308",
+                 "Net GEX crosses zero; above = vol suppressed, below = vol amplified"),
+        ]
+        for i, node in enumerate(king_nodes[:3]):
+            dist = (node - spot) / spot * 100
+            lev_cards.append(
+                _lev(f"King Node K{i+1}",
+                     f"${node:.2f}",
+                     "#0a84ff",
+                     f"{dist:+.1f}% from spot · highest GEX magnitude")
+            )
+        if resistance:
+            lev_cards.append(
+                _lev("GEX Resistance", f"${resistance:.2f}", "#00C805",
+                     "Strong positive GEX above spot — dealer hedging acts as ceiling")
+            )
+        if support:
+            lev_cards.append(
+                _lev("GEX Support", f"${support:.2f}", "#F23645",
+                     "Strong negative GEX below spot — dealer hedging acts as floor")
+            )
+
+        st.markdown(
+            '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));'
+            'gap:10px;margin-bottom:24px;">'
+            + "".join(lev_cards)
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── VEX chart ─────────────────────────────────────────────────────────
+        if not vex.empty:
+            vex_near = vex[(vex["strike"] >= lo) & (vex["strike"] <= hi)].copy()
+            if not vex_near.empty:
+                with st.expander("Vanna Exposure (VEX) profile"):
+                    st.markdown(
+                        '<div style="font-size:0.78rem;color:rgba(255,255,255,0.4);padding:4px 0 14px;">'
+                        'VEX = Vanna × OI × 100 × Spot / 1M. '
+                        'When IV falls, positive VEX → dealers buy stock (tailwind). '
+                        'When IV rises, positive VEX → dealers sell stock (headwind).'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    vpos = vex_near["net_vex"] >= 0
+                    vneg = ~vpos
+                    fig_vex = go.Figure()
+                    fig_vex.add_trace(go.Bar(
+                        x=vex_near[vpos]["strike"].tolist(),
+                        y=vex_near[vpos]["net_vex"].tolist(),
+                        name="Net VEX (+)",
+                        marker_color="#0a84ff",
+                        opacity=0.75,
+                    ))
+                    fig_vex.add_trace(go.Bar(
+                        x=vex_near[vneg]["strike"].tolist(),
+                        y=vex_near[vneg]["net_vex"].tolist(),
+                        name="Net VEX (−)",
+                        marker_color="#ff9f0a",
+                        opacity=0.75,
+                    ))
+                    fig_vex.add_vline(
+                        x=spot,
+                        line_color="rgba(255,255,255,0.7)",
+                        line_width=2,
+                    )
+                    if flip:
+                        fig_vex.add_vline(
+                            x=flip, line_color="#eab308", line_dash="dash", line_width=1.5,
+                        )
+                    fig_vex.update_layout(
+                        paper_bgcolor="#050507",
+                        plot_bgcolor="#0A0A0D",
+                        height=320,
+                        barmode="relative",
+                        font=dict(color="rgba(255,255,255,0.6)"),
+                        xaxis=dict(gridcolor="rgba(255,255,255,0.04)", tickprefix="$"),
+                        yaxis=dict(gridcolor="rgba(255,255,255,0.04)", title="VEX ($M)"),
+                        legend=dict(bgcolor="#0A0A0D", bordercolor="rgba(255,255,255,0.07)",
+                                    orientation="h", y=-0.22),
+                        margin=dict(l=8, r=8, t=8, b=8),
+                    )
+                    st.plotly_chart(fig_vex, use_container_width=True)
+
+        # ── Per-expiry GEX breakdown ──────────────────────────────────────────
+        with st.expander("GEX by expiry"):
+            expiry_gex = (
+                chain.assign(
+                    gex_contrib=lambda d: np.where(
+                        d["optionType"] == "call",
+                        d["gamma"] * d["openInterest"] * spot ** 2 * 100 / 1e6,
+                        -(d["gamma"] * d["openInterest"] * spot ** 2 * 100 / 1e6),
+                    )
+                )
+                .groupby(["expiry", "dte"])["gex_contrib"]
+                .sum()
+                .reset_index()
+                .sort_values("dte")
+            )
+            if not expiry_gex.empty:
+                fig_exp = go.Figure(go.Bar(
+                    x=expiry_gex["expiry"].tolist(),
+                    y=expiry_gex["gex_contrib"].tolist(),
+                    marker_color=[
+                        "#00C805" if v >= 0 else "#F23645"
+                        for v in expiry_gex["gex_contrib"]
+                    ],
+                    text=[f"{v:+.2f}M" for v in expiry_gex["gex_contrib"]],
+                    textposition="outside",
+                    textfont=dict(size=10, color="rgba(255,255,255,0.6)"),
+                ))
+                fig_exp.update_layout(
+                    paper_bgcolor="#050507",
+                    plot_bgcolor="#0A0A0D",
+                    height=300,
+                    font=dict(color="rgba(255,255,255,0.6)"),
+                    yaxis=dict(gridcolor="rgba(255,255,255,0.04)", title="Net GEX ($M)"),
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.03)"),
+                    margin=dict(l=8, r=8, t=8, b=8),
+                )
+                st.plotly_chart(fig_exp, use_container_width=True)
+
+    hs_rf1, hs_rf2 = st.columns([3, 1])
+    with hs_rf2:
+        if st.button("↺ Refresh Chain", key="hs_refresh", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+    st.markdown(
+        '<div style="font-size:0.68rem;color:rgba(255,255,255,0.2);margin-top:12px;">'
+        'Greeks computed via Black-Scholes · Data from yfinance · Cached 10 min · '
+        'GEX regime: positive = dealers long gamma (vol suppressed), '
+        'negative = dealers short gamma (moves amplified) · Educational use only.</div>',
+        unsafe_allow_html=True,
+    )
