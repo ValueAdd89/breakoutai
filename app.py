@@ -1920,6 +1920,230 @@ distance from 52-week high, OBV slope, BB width
 # TAB 7 — FLOWSEEKER  (institutional options flow scanner)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _flow_narrative_html(
+    disp: pd.DataFrame,
+    call_dp: float,
+    put_dp: float,
+    cp_ratio: float,
+) -> str:
+    """
+    Plain-language interpretation of the current options flow.
+    Tells the trader what the data means and what to watch.
+    """
+    if disp.empty:
+        return ""
+
+    total_dp   = call_dp + put_dp
+    n_unusual  = int(disp["unusual"].sum())
+    avg_dte    = disp["dte"].mean()
+    short_dt   = disp[disp["dte"] <= 7]
+    n_short    = len(short_dt)
+
+    # Overall bias sentence
+    if cp_ratio >= 2.0:
+        bias_head  = "Strongly Bullish"
+        bias_color = "#00C805"
+        bias_desc  = (
+            f"Call buyers are dominating today with a {cp_ratio:.1f}x call-to-put ratio. "
+            "Paying premium to own calls requires the stock to go <strong>up</strong> to profit — "
+            "this level of skew signals genuine upside conviction, not just hedging."
+        )
+    elif cp_ratio >= 1.3:
+        bias_head  = "Moderately Bullish"
+        bias_color = "#22c55e"
+        bias_desc  = (
+            f"More capital is flowing into calls than puts ({cp_ratio:.1f}x ratio). "
+            "Participants are leaning long. Watch for unusual sweeps in individual names "
+            "for the highest-conviction bets."
+        )
+    elif cp_ratio <= 0.5:
+        bias_head  = "Strongly Bearish"
+        bias_color = "#F23645"
+        bias_desc  = (
+            f"Put buyers are dominating with a {1/cp_ratio:.1f}x put-to-call ratio. "
+            "Large put premium usually means either directional bets to the downside, "
+            "or significant hedging of long equity portfolios by institutions — "
+            "both are warning signs for bulls."
+        )
+    elif cp_ratio <= 0.77:
+        bias_head  = "Moderately Bearish"
+        bias_color = "#ef4444"
+        bias_desc  = (
+            f"Put flows are outpacing calls ({1/cp_ratio:.1f}x put-to-call). "
+            "Defensive positioning is elevated. Could be hedging or directional — "
+            "check individual names with highest put premium for confirmation."
+        )
+    else:
+        bias_head  = "Neutral / Mixed"
+        bias_color = "#eab308"
+        bias_desc  = (
+            "Calls and puts are receiving roughly equal premium. "
+            "No clear directional conviction from options flow today — "
+            "the market may be in wait-and-see mode. Focus on individual "
+            "names with unusual activity rather than the aggregate."
+        )
+
+    # Notable symbols
+    sym_grp = (
+        disp.groupby("symbol")
+        .agg(
+            total=("dollar_premium", "sum"),
+            call_sum=("dollar_premium", lambda x: x[disp.loc[x.index, "type"] == "CALL"].sum()),
+            put_sum=("dollar_premium", lambda x: x[disp.loc[x.index, "type"] == "PUT"].sum()),
+            max_vol_oi=("vol_oi", "max"),
+            contracts=("symbol", "count"),
+        )
+        .sort_values("total", ascending=False)
+    )
+
+    notable_items = []
+    for sym, sr in sym_grp.head(4).iterrows():
+        t = sr["total"]
+        c = sr["call_sum"]
+        p = sr["put_sum"]
+        vo = sr["max_vol_oi"]
+        t_str = f"${t/1e6:.1f}M" if t >= 1e6 else f"${t/1e3:.0f}k"
+
+        if c > p * 1.5:
+            flavor = f"<strong style='color:#00C805;'>{t_str} in calls</strong> — bullish premium accumulation"
+        elif p > c * 1.5:
+            flavor = f"<strong style='color:#F23645;'>{t_str} in puts</strong> — bearish/hedging activity"
+        else:
+            flavor = f"<strong style='color:#eab308;'>{t_str} mixed</strong> — no clear directional lean"
+
+        if vo >= 1.0:
+            flavor += f" · Vol/OI {vo:.1f}x suggests <em>new positions being opened</em>"
+        elif vo >= 0.5:
+            flavor += f" · Elevated Vol/OI ({vo:.1f}x) — unusual interest"
+
+        notable_items.append(
+            f'<li style="margin-bottom:8px;"><strong style="color:#fff;">{sym}</strong>: {flavor}</li>'
+        )
+
+    notable_html = (
+        '<ul style="margin:0;padding-left:20px;color:rgba(255,255,255,0.7);font-size:0.82rem;">'
+        + "".join(notable_items)
+        + "</ul>"
+    )
+
+    # What to watch
+    watch_items = []
+    if n_unusual > 0:
+        watch_items.append(
+            f'<strong style="color:#eab308;">{n_unusual} contract{"s" if n_unusual != 1 else ""} flagged UNUSUAL</strong> '
+            f'(Vol/OI ≥ 0.5 or Volume ≥ 1,000 or Premium ≥ $100k) — '
+            "these often precede significant moves in the next 1–5 days. Prioritise these for trade ideas."
+        )
+    if n_short > 0 and avg_dte <= 14:
+        watch_items.append(
+            f'<strong style="color:#fff;">{n_short} short-dated prints (≤ 7 DTE)</strong> — '
+            "speculative, catalyst-driven bets. Someone expects a move this week. "
+            "Check for earnings, macro events, or technical setups."
+        )
+    if avg_dte > 30:
+        watch_items.append(
+            f"Average DTE is <strong style='color:#fff;'>{avg_dte:.0f} days</strong> — "
+            "flow is positioned further out, suggesting longer-term conviction or institutional hedging "
+            "rather than short-term speculation."
+        )
+    if cp_ratio >= 1.5:
+        watch_items.append(
+            "High Vol/OI calls in individual names signal <em>fresh positioning</em>, "
+            "not just rolling existing contracts — weight these higher."
+        )
+    if cp_ratio <= 0.7:
+        watch_items.append(
+            "Heavy put flow can mean institutions are buying <em>portfolio insurance</em>. "
+            "This alone doesn't mean the market will drop — but if multiple names show put sweeps "
+            "simultaneously, treat it as a risk-off signal."
+        )
+
+    watch_html = (
+        '<ul style="margin:0;padding-left:20px;color:rgba(255,255,255,0.7);font-size:0.82rem;">'
+        + "".join(
+            f'<li style="margin-bottom:7px;">{w}</li>' for w in watch_items
+        )
+        + "</ul>"
+    ) if watch_items else '<p style="color:rgba(255,255,255,0.4);font-size:0.82rem;">No specific warnings.</p>'
+
+    # Trade implication
+    if cp_ratio >= 1.3:
+        trade_impl = (
+            "Options flow is leaning <strong style='color:#00C805;'>long</strong>. "
+            "Consider call debit spreads or outright calls on the names with highest call premium + unusual flag. "
+            "Short-dated unusual calls (<7 DTE) are the most speculative — size smaller. "
+            "Avoid buying puts against this flow without a strong technical reason."
+        )
+    elif cp_ratio <= 0.77:
+        trade_impl = (
+            "Options flow is leaning <strong style='color:#F23645;'>short/defensive</strong>. "
+            "Consider put debit spreads or reducing long exposure in names with heavy put flow. "
+            "High Vol/OI puts often signal smart money distribution. "
+            "Don't fight persistent put accumulation in the same ticker across multiple days."
+        )
+    else:
+        trade_impl = (
+            "Mixed flow — no edge from aggregate positioning. "
+            "Drill into <strong>individual unusual prints</strong>: high Vol/OI + large premium "
+            "in a single ticker is the signal worth acting on. "
+            "Avoid positions based solely on aggregate C/P ratio when it's near 1."
+        )
+
+    return f"""
+<div style="background:rgba(8,12,18,0.9);border:1px solid rgba(255,255,255,0.07);
+            border-radius:16px;padding:22px 24px;margin-bottom:20px;">
+
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;
+              flex-wrap:wrap;">
+    <div style="font-size:1.05rem;font-weight:800;color:#fff;letter-spacing:-0.02em;">
+      📊 Flow Narrative
+    </div>
+    <span style="background:{bias_color}22;border:1px solid {bias_color}55;
+                 color:{bias_color};font-size:0.75rem;font-weight:700;
+                 padding:3px 12px;border-radius:20px;">{bias_head}</span>
+    <span style="font-size:0.72rem;color:rgba(255,255,255,0.35);">
+      {len(disp):,} contracts · ${total_dp/1e6:.2f}M total premium
+    </span>
+  </div>
+
+  <p style="color:rgba(255,255,255,0.7);font-size:0.84rem;
+            line-height:1.65;margin:0 0 18px 0;">{bias_desc}</p>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;
+              border-top:1px solid rgba(255,255,255,0.06);padding-top:18px;">
+
+    <div>
+      <div style="font-size:0.62rem;font-weight:700;color:rgba(255,255,255,0.35);
+                  letter-spacing:0.09em;text-transform:uppercase;margin-bottom:10px;">
+        🔥 Notable Activity
+      </div>
+      {notable_html}
+    </div>
+
+    <div>
+      <div style="font-size:0.62rem;font-weight:700;color:rgba(255,255,255,0.35);
+                  letter-spacing:0.09em;text-transform:uppercase;margin-bottom:10px;">
+        ⚠️ What to Watch
+      </div>
+      {watch_html}
+    </div>
+  </div>
+
+  <div style="margin-top:18px;padding:14px 16px;
+              background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);
+              border-radius:10px;">
+    <div style="font-size:0.62rem;font-weight:700;color:rgba(255,255,255,0.35);
+                letter-spacing:0.09em;text-transform:uppercase;margin-bottom:7px;">
+      💡 Trading Implication
+    </div>
+    <p style="color:rgba(255,255,255,0.72);font-size:0.82rem;
+              line-height:1.6;margin:0;">{trade_impl}</p>
+  </div>
+
+</div>
+"""
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_flow_scan(syms_key: str, min_prem: float) -> pd.DataFrame:
     syms = [s.strip() for s in syms_key.split(",") if s.strip()] if syms_key else None
@@ -2073,6 +2297,12 @@ with t7:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
+        # ── Flow narrative ────────────────────────────────────────────────────
+        st.markdown(
+            _flow_narrative_html(disp, call_dp, put_dp, cp_ratio),
+            unsafe_allow_html=True,
+        )
+
         # ── Per-symbol summary pills ──────────────────────────────────────────
         sym_groups = (
             disp.groupby("symbol")
@@ -2172,6 +2402,221 @@ with t7:
     )
 
 
+def _gex_narrative_html(
+    levels: dict,
+    spot: float,
+    symbol: str,
+    gex: "pd.DataFrame",
+) -> str:
+    """
+    Plain-language interpretation of the GEX profile.
+    Explains what the current dealer positioning means and how to trade it.
+    """
+    if not levels or gex is None or gex.empty:
+        return ""
+
+    regime     = levels.get("gex_regime", "Unknown")
+    flip       = levels.get("flip_level")
+    king_nodes = levels.get("king_nodes", [])
+    resistance = levels.get("resistance")
+    support    = levels.get("support")
+    total_gex  = levels.get("total_gex", 0.0)
+    is_long    = regime == "Long Gamma"
+    rc         = "#00C805" if is_long else "#F23645"
+
+    flip_dist_pct = abs(flip - spot) / spot * 100 if flip else None
+    flip_dir      = "below" if (flip and flip < spot) else "above"
+
+    # ── Regime explanation ────────────────────────────────────────────────────
+    if is_long:
+        regime_desc = (
+            f"Dealers are currently <strong>net long gamma</strong> on {symbol}. "
+            "They sold options to the market and must hedge by buying when price falls and "
+            "selling when price rises — the opposite of momentum. "
+            "This mechanical hedging <strong>suppresses volatility</strong> and creates "
+            "a gravitational pull toward the highest-gamma strikes. "
+            "Expect price to stay rangebound and breakouts to fade."
+        )
+        env_label = "Rangebound / Vol-Suppressed Environment"
+        env_color = "#00C805"
+    else:
+        regime_desc = (
+            f"Dealers are currently <strong>net short gamma</strong> on {symbol}. "
+            "They are long options and hedge by selling when price falls and buying when it rises — "
+            "the same direction as momentum. "
+            "This <strong>amplifies moves</strong> in both directions. "
+            "Trending strategies and directional plays work better here; "
+            "range-bound strategies face more risk of getting run over."
+        )
+        env_label = "Trending / Vol-Amplified Environment"
+        env_color = "#F23645"
+
+    # ── Flip level ────────────────────────────────────────────────────────────
+    if flip:
+        flip_msg = (
+            f"The flip level is <strong style='color:#eab308;'>${flip:.2f}</strong> "
+            f"({flip_dist_pct:.1f}% {flip_dir} spot). "
+        )
+        if is_long:
+            if flip < spot:
+                flip_msg += (
+                    f"If {symbol} <strong>closes below ${flip:.2f}</strong>, dealers flip to short gamma. "
+                    "Their hedging becomes pro-cyclical — selling as price falls, accelerating the move. "
+                    "<strong>A break below the flip is a warning sign for a faster, deeper selloff.</strong>"
+                )
+            else:
+                flip_msg += (
+                    f"If {symbol} <strong>rallies above ${flip:.2f}</strong>, dealers flip to short gamma "
+                    "and their buying accelerates the upside move. "
+                    "This level acts as a potential <em>gamma squeeze trigger</em>."
+                )
+        else:
+            if flip > spot:
+                flip_msg += (
+                    f"A recovery <strong>above ${flip:.2f}</strong> would flip dealers long gamma again, "
+                    "dampening volatility and stabilising price. "
+                    "<strong>Watch for a reclaim of the flip as a potential trend reversal signal.</strong>"
+                )
+            else:
+                flip_msg += (
+                    f"Price is already below the flip level — currently in an amplified-move regime. "
+                    "Sustained move above ${flip:.2f} would be needed to restore a calmer environment."
+                )
+    else:
+        flip_msg = "No clear GEX flip level identified in the visible strike range."
+
+    # ── King Nodes ────────────────────────────────────────────────────────────
+    kn_parts = []
+    for i, node in enumerate(king_nodes[:3]):
+        dist = (node - spot) / spot * 100
+        dir_word = "above" if dist > 0 else "below"
+        dist_abs = abs(dist)
+        kn_parts.append(
+            f"<strong style='color:#0a84ff;'>${node:.2f}</strong> ({dist_abs:.1f}% {dir_word} spot) "
+            f"— highest gamma concentration near here. "
+            f"{'Price tends to pin to this strike near expiry.' if dist_abs < 3 else 'Acts as a gravitational level; options sellers will defend it.'}"
+        )
+    king_html = (
+        '<ul style="margin:0;padding-left:18px;color:rgba(255,255,255,0.7);font-size:0.82rem;">'
+        + "".join(f'<li style="margin-bottom:7px;">{k}</li>' for k in kn_parts)
+        + "</ul>"
+    ) if kn_parts else '<p style="color:rgba(255,255,255,0.4);font-size:0.82rem;">No King Nodes in current range.</p>'
+
+    # ── Resistance / Support ──────────────────────────────────────────────────
+    level_items = []
+    if resistance:
+        dist_r = (resistance - spot) / spot * 100
+        level_items.append(
+            f"<strong style='color:#00C805;'>${resistance:.2f}</strong> GEX Resistance "
+            f"(+{dist_r:.1f}% from spot) — "
+            "Heavy call open interest here means dealers sell stock as price approaches, "
+            "creating a natural ceiling. A sustained break above with volume is more significant than a brief tag."
+        )
+    if support:
+        dist_s = (support - spot) / spot * 100
+        level_items.append(
+            f"<strong style='color:#F23645;'>${support:.2f}</strong> GEX Support "
+            f"({dist_s:.1f}% from spot) — "
+            "Put open interest here creates dealer buying as price approaches, "
+            "acting as a floor. Below this level, hedging support disappears — expect air pockets."
+        )
+    levels_html = (
+        '<ul style="margin:0;padding-left:18px;color:rgba(255,255,255,0.7);font-size:0.82rem;">'
+        + "".join(f'<li style="margin-bottom:8px;">{l}</li>' for l in level_items)
+        + "</ul>"
+    ) if level_items else ""
+
+    # ── Trading implication ───────────────────────────────────────────────────
+    if is_long:
+        if flip and flip_dist_pct and flip_dist_pct < 3:
+            trade_impl = (
+                f"⚡ <strong>High alert</strong>: The flip level is very close to spot ({flip_dist_pct:.1f}% away). "
+                f"A small adverse move pushes {symbol} into Short Gamma. "
+                "Be cautious with rangebound strategies — a volatility spike could rapidly reprice. "
+                "Consider tighter stops or smaller position sizes."
+            )
+        else:
+            trade_impl = (
+                "In a Long Gamma environment, the best strategies are: "
+                "<strong>selling premium at extremes</strong> (iron condors, credit spreads near King Nodes), "
+                "fading breakout moves that lack volume confirmation, "
+                "and taking profits on directional trades faster than usual. "
+                f"The market's {symbol} position is essentially self-correcting right now."
+            )
+    else:
+        trade_impl = (
+            "In a Short Gamma environment, <strong>momentum strategies</strong> have the wind behind them. "
+            "Buy breakouts with confirmation, trail stops rather than fading, "
+            "and expect larger candles in both directions. "
+            "Avoid selling premium naked — the gamma amplification can cause rapid, large moves "
+            "that blow through short strikes."
+        )
+
+    return f"""
+<div style="background:rgba(8,12,18,0.9);border:1px solid rgba(255,255,255,0.07);
+            border-radius:16px;padding:22px 24px;margin-bottom:20px;">
+
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="font-size:1.05rem;font-weight:800;color:#fff;letter-spacing:-0.02em;">
+      📊 Market Narrative
+    </div>
+    <span style="background:{env_color}22;border:1px solid {env_color}55;
+                 color:{env_color};font-size:0.75rem;font-weight:700;
+                 padding:3px 12px;border-radius:20px;">{env_label}</span>
+    <span style="font-size:0.72rem;color:rgba(255,255,255,0.35);">
+      {symbol} @ ${spot:.2f} · GEX {total_gex:+.1f}M
+    </span>
+  </div>
+
+  <p style="color:rgba(255,255,255,0.72);font-size:0.84rem;line-height:1.65;
+            margin:0 0 18px 0;">{regime_desc}</p>
+
+  <div style="background:rgba(234,179,8,0.06);border:1px solid rgba(234,179,8,0.18);
+              border-radius:10px;padding:13px 16px;margin-bottom:18px;">
+    <div style="font-size:0.62rem;font-weight:700;color:#eab308;
+                letter-spacing:0.09em;text-transform:uppercase;margin-bottom:6px;">
+      🎯 Flip Level — Critical Threshold
+    </div>
+    <p style="color:rgba(255,255,255,0.72);font-size:0.82rem;
+              line-height:1.6;margin:0;">{flip_msg}</p>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;
+              border-top:1px solid rgba(255,255,255,0.06);padding-top:18px;">
+
+    <div>
+      <div style="font-size:0.62rem;font-weight:700;color:rgba(255,255,255,0.35);
+                  letter-spacing:0.09em;text-transform:uppercase;margin-bottom:10px;">
+        👑 King Nodes (price magnets)
+      </div>
+      {king_html}
+    </div>
+
+    <div>
+      <div style="font-size:0.62rem;font-weight:700;color:rgba(255,255,255,0.35);
+                  letter-spacing:0.09em;text-transform:uppercase;margin-bottom:10px;">
+        🧱 GEX Walls
+      </div>
+      {levels_html if levels_html else
+       '<p style="color:rgba(255,255,255,0.4);font-size:0.82rem;">No clear walls identified.</p>'}
+    </div>
+  </div>
+
+  <div style="margin-top:18px;padding:14px 16px;
+              background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);
+              border-radius:10px;">
+    <div style="font-size:0.62rem;font-weight:700;color:rgba(255,255,255,0.35);
+                letter-spacing:0.09em;text-transform:uppercase;margin-bottom:7px;">
+      💡 Trading Implication
+    </div>
+    <p style="color:rgba(255,255,255,0.72);font-size:0.82rem;
+              line-height:1.6;margin:0;">{trade_impl}</p>
+  </div>
+
+</div>
+"""
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 8 — HEATSEEKER  (GEX / VEX dealer-positioning heatmap)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2255,6 +2700,12 @@ with t8:
         )
 
         st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── GEX narrative ─────────────────────────────────────────────────────
+        st.markdown(
+            _gex_narrative_html(levels, spot, hs_target, gex),
+            unsafe_allow_html=True,
+        )
 
         # ── GEX profile chart ─────────────────────────────────────────────────
         lo = spot * (1 - hs_range / 100)
